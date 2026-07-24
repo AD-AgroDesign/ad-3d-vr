@@ -1,0 +1,6 @@
+# Sistema
+Thumbs.db
+.DS_Store
+*.tmp
+
+# Nada de build: sitio estático puro (ver HANDOFF_VR.md §2, regla 4)

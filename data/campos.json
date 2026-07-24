@@ -1,0 +1,29 @@
+{
+  "default": "monte_hermoso",
+  "campos": [
+    {
+      "id": "monte_hermoso",
+      "nombre": "Monte Hermoso",
+      "cliente": "AgroDesign",
+      "inicial": "data/monte_hermoso/inicial.geojson",
+      "multifuncional": "data/monte_hermoso/multifuncional.geojson",
+      "maxzoom": 18
+    },
+    {
+      "id": "silesia",
+      "nombre": "Silesia",
+      "cliente": "El Parque Papas",
+      "inicial": "data/silesia/inicial.geojson",
+      "multifuncional": "data/silesia/multifuncional.geojson",
+      "maxzoom": 17
+    },
+    {
+      "id": "carmen",
+      "nombre": "Carmen",
+      "cliente": "AgroDesign",
+      "inicial": "data/carmen/inicial.geojson",
+      "multifuncional": "data/carmen/multifuncional.geojson",
+      "maxzoom": 17
+    }
+  ]
+}
