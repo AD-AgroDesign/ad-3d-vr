@@ -91,10 +91,16 @@ const Perf = {
   radioMatas() { return this.dial.radioMatas * ESCALONES[this.escalon]; },
   radioArboles() { return this.dial.radioArboles * ESCALONES[this.escalon]; },
 
-  init(el, activo) {
+  /* `el2` es el espejo del HUD para el ojo derecho: en modo cardboard el
+     panel de una esquina no se lee con el visor puesto, así que el mismo
+     texto se pinta dos veces, una por mitad del canvas (el CSS los ubica
+     en el centro de cada lente). */
+  init(el, activo, el2) {
     this.el = el;
+    this.el2 = el2 || null;
     this.activo = !!activo;
     if (el) el.style.display = activo ? "block" : "none";
+    if (this.el2) this.el2.style.display = "none";
     this.t0 = performance.now();
     document.addEventListener("visibilitychange", () => {
       if (document.hidden) { this.oculta = true; this.muestras.length = 0; }
@@ -160,17 +166,32 @@ const Perf = {
     if (this.escalon !== previo && typeof Chunks !== "undefined") Chunks.invalidar();
   },
 
+  /* Línea extra que el driver de turno puede escribir (p. ej. el estado de
+     la cabeza en cardboard). No la toca Perf: sólo la pinta. */
+  linea: "",
+
   _pintar(renderer) {
     const r = renderer.info.render;
     const exceso = r.triangles > this.dial.trisObjetivo;
-    this.el.innerHTML =
+    // En estéreo renderer.info se resetea en cada render(), así que estos
+    // números son los del ÚLTIMO ojo dibujado: la unidad correcta del
+    // presupuesto de §9.5, que es "por ojo".
+    const html =
       `<b>${this.fps.toFixed(0)}</b> fps · p95 ${this.p95.toFixed(1)} ms<br>` +
       `<span class="${exceso ? "warn" : ""}">${(r.triangles / 1000).toFixed(0)} k tris</span>` +
       ` · ${r.calls} draw calls<br>` +
       `tier <b>${this.tier}</b> · escalón ${this.escalon} · R ${Math.round(Chunks.radioEfectivoMatas())} m` +
       ` · objetivo ${this.dial.fpsObjetivo} fps` +
+      (this.linea ? `<br>${this.linea}` : "") +
       (this._ultimoCambio ? `<br><span class="warn">${this._ultimoCambio}</span>` : "") +
       (this.oculta ? '<br><span class="warn">hubo pestaña oculta: fps no confiable</span>' : "");
+    this.el.innerHTML = html;
+    if (this.el2 && this.el2.style.display !== "none") this.el2.innerHTML = html;
+  },
+
+  /* Enciende o apaga el espejo del ojo derecho (lo llama el driver) */
+  espejo(on) {
+    if (this.el2) this.el2.style.display = (on && this.activo) ? "block" : "none";
   },
 
   snapshot(renderer) {

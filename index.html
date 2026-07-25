@@ -4,7 +4,10 @@
   <meta charset="utf-8">
   <title>AgroDesign · Navegador 3D VR</title>
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#0d1a10">
   <link rel="icon" type="image/png" href="img/logo.png">
+  <link rel="manifest" href="manifest.webmanifest">
   <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
@@ -17,13 +20,26 @@
   </div>
 
   <div id="escenario"></div>
+  <!-- El HUD se pinta dos veces en modo cardboard, una por ojo: con el visor
+       puesto un panel en la esquina no se lee (§11.3 pide el fps del HUD). -->
   <div id="hud"></div>
+  <div id="hud2"></div>
+  <div id="aviso"></div>
   <div id="ayuda">
     <kbd>click</kbd> capturar el mouse · <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> moverse ·
     <kbd>Q</kbd><kbd>E</kbd> girar · <kbd>R</kbd><kbd>F</kbd> subir/bajar · <kbd>Shift</kbd> rápido<br>
-    <kbd>Espacio</kbd> conmutar paisaje · <kbd>G</kbd> dron/suelo · <kbd>H</kbd> vista inicial ·
-    <kbd>Esc</kbd> soltar el mouse
+    <kbd>Espacio</kbd> conmutar paisaje · <kbd>G</kbd> dron/suelo · <kbd>H</kbd> vista aérea ·
+    <kbd>C</kbd> recentrar · <kbd>Esc</kbd> soltar el mouse
   </div>
+
+  <!-- Botones del modo VR. Son para ANTES de meter el teléfono en el visor:
+       con el visor puesto no se toca la pantalla (el mando llega en P5). -->
+  <div id="vr-botones">
+    <button id="btn-vr" type="button">Entrar en VR</button>
+    <button id="btn-recentrar" type="button" hidden>Recentrar</button>
+    <button id="btn-salir" type="button" hidden>Salir</button>
+  </div>
+
   <div id="credito">Imagen satelital © Esri, Maxar, Earthstar Geographics | AgroDesign</div>
   <pre id="error"></pre>
 
@@ -45,6 +61,7 @@
   <script src="js/perf.js"></script>
   <script src="js/rig.js"></script>
   <script src="js/display-flat.js"></script>
+  <script src="js/display-cardboard.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <title>Diagnóstico del dispositivo · AgroDesign VR</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <link rel="icon" type="image/png" href="img/logo.png">
+  <style>
+    /* Letra grande a propósito (§9.15): esta página se lee en un teléfono,
+       con el brazo estirado, y el dueño tiene que poder mandar el texto. */
+    :root { --ink: #e8efe0; --muted: #a8c0ab; --ok: #8bc34a; --bad: #e57373; --gold: #e8d9a0; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 14px 14px 90px; background: #0d1a10; color: var(--ink);
+      font: 16px/1.5 -apple-system, Segoe UI, Roboto, system-ui, sans-serif;
+      overscroll-behavior: none;
+    }
+    h1 { font-size: 20px; margin: 0 0 4px; }
+    h1 span { color: var(--gold); }
+    p.sub { color: var(--muted); margin: 0 0 14px; font-size: 14px; }
+    section { background: rgba(255, 255, 255, .04); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; }
+    h2 { font-size: 15px; margin: 0 0 8px; color: var(--gold); letter-spacing: .02em; }
+    .fila { display: flex; gap: 10px; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid rgba(255,255,255,.06); }
+    .fila:last-child { border-bottom: 0; }
+    .k { color: var(--muted); flex: 0 0 auto; }
+    .v { text-align: right; word-break: break-word; font-family: ui-monospace, monospace; font-size: 14px; }
+    .ok { color: var(--ok); } .bad { color: var(--bad); } .warn { color: var(--gold); }
+    #barra {
+      position: fixed; bottom: 0; left: 0; right: 0; display: flex; gap: 8px; padding: 10px 12px;
+      background: rgba(10, 20, 13, .95); border-top: 1px solid rgba(255,255,255,.1);
+    }
+    button {
+      flex: 1; font: 600 15px/1 inherit; color: var(--ink); background: #1e3626;
+      border: 1px solid #3d6b47; border-radius: 999px; padding: 14px 10px; cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+    }
+    button:active { background: #3d6b47; }
+    canvas { width: 100%; height: 120px; display: block; border-radius: 8px; background: #101d13; }
+    #copiado { position: fixed; bottom: 74px; left: 50%; transform: translateX(-50%); display: none;
+      background: #1e3626; border: 1px solid #3d6b47; border-radius: 8px; padding: 6px 12px; font-size: 14px; }
+    textarea { width: 100%; height: 120px; display: none; margin-top: 8px; font: 12px ui-monospace, monospace; }
+  </style>
+</head>
+<body>
+  <h1>Diagnóstico del dispositivo <span>· AgroDesign VR</span></h1>
+  <p class="sub">Tocá <b>Copiar todo</b> al final y mandá el texto. Si el giroscopio no aparece,
+    lo primero a mirar es <b>contexto seguro</b>.</p>
+
+  <section id="s-critico"><h2>Lo crítico</h2><div id="critico"></div></section>
+  <section><h2>Movimiento y orientación</h2><div id="orient"></div></section>
+  <section><h2>Pantalla</h2><div id="pantalla"></div></section>
+  <section><h2>WebXR</h2><div id="xr"></div></section>
+  <section><h2>WebGL</h2><div id="gl"></div></section>
+  <section><h2>Mandos (gamepads)</h2><div id="pads"></div>
+    <p class="sub" style="margin:8px 0 0">Muchos mandos «VR» baratos se presentan como teclado y no
+      aparecen acá; el mapeo real se resuelve en <b>input-test.html</b> (P5).</p></section>
+  <section><h2>Navegador</h2><div id="nav"></div></section>
+  <section><h2>Cubo de referencia</h2><canvas id="cubo"></canvas><div id="fps"></div></section>
+
+  <textarea id="volcado" readonly></textarea>
+  <div id="copiado">copiado</div>
+  <div id="barra">
+    <button id="btn-inmersion" type="button">Probar pantalla completa</button>
+    <button id="btn-copiar" type="button">Copiar todo</button>
+  </div>
+
+  <script src="vendor/three.min.js"></script>
+  <script>
+  "use strict";
+  /* ============================================================
+     diag.html — La herramienta que más tiempo ahorra en las pruebas
+     remotas: el agente no tiene el teléfono ni el visor (§11.2), así que
+     todo lo que se pueda leer del dispositivo tiene que salir de acá en un
+     solo texto copiable.
+     Es una página autosuficiente a propósito: no depende de ningún js/ del
+     proyecto, así que sirve incluso si la app principal está rota.
+     ============================================================ */
+
+  const filas = {};           // clave → { el, valor } para el volcado de texto
+
+  function poner(zona, clave, valor, estado) {
+    const cont = document.getElementById(zona);
+    let f = filas[clave];
+    if (!f) {
+      const div = document.createElement("div");
+      div.className = "fila";
+      div.innerHTML = `<span class="k"></span><span class="v"></span>`;
+      div.querySelector(".k").textContent = clave;
+      cont.appendChild(div);
+      f = filas[clave] = { el: div.querySelector(".v"), zona };
+    }
+    f.el.textContent = String(valor);
+    f.el.className = "v" + (estado ? " " + estado : "");
+    f.valor = String(valor);
+  }
+
+  /* ---------- Lo crítico ---------- */
+  poner("critico", "contexto seguro (HTTPS)", isSecureContext, isSecureContext ? "ok" : "bad");
+  poner("critico", "origen", location.origin);
+  poner("critico", "giroscopio", "esperando…", "warn");
+
+  /* ---------- Pantalla ---------- */
+  function pantalla() {
+    poner("pantalla", "devicePixelRatio", devicePixelRatio);
+    poner("pantalla", "innerWidth × innerHeight", innerWidth + " × " + innerHeight);
+    poner("pantalla", "screen.width × height", screen.width + " × " + screen.height);
+    poner("pantalla", "visualViewport", visualViewport
+      ? `${Math.round(visualViewport.width)} × ${Math.round(visualViewport.height)} · escala ${visualViewport.scale}`
+      : "no disponible");
+    const o = screen.orientation;
+    poner("pantalla", "screen.orientation", o ? `${o.type} · ${o.angle}°` : "no disponible (window.orientation: " + window.orientation + ")");
+    poner("pantalla", "requestFullscreen", !!(document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen), "");
+    poner("pantalla", "orientation.lock", !!(o && o.lock));
+    poner("pantalla", "wakeLock", "wakeLock" in navigator, ("wakeLock" in navigator) ? "ok" : "warn");
+    poner("pantalla", "en pantalla completa", !!(document.fullscreenElement || document.webkitFullscreenElement));
+  }
+  pantalla();
+  addEventListener("resize", pantalla);
+  if (screen.orientation) screen.orientation.addEventListener("change", pantalla);
+  for (const ev of ["fullscreenchange", "webkitfullscreenchange"]) document.addEventListener(ev, pantalla);
+
+  /* ---------- Movimiento y orientación (§9.8) ---------- */
+  const tipoPermiso = (typeof DeviceOrientationEvent !== "undefined" &&
+    typeof DeviceOrientationEvent.requestPermission === "function");
+  poner("orient", "DeviceOrientationEvent", typeof DeviceOrientationEvent !== "undefined");
+  // requestPermission sólo existe en iOS 13+. En Android no hay diálogo.
+  poner("orient", "requestPermission (⇒ iOS 13+)", tipoPermiso ? "sí" : "no (Android: sin diálogo)");
+  poner("orient", "resultado del permiso", tipoPermiso ? "sin pedir" : "no aplica");
+
+  let evs = 0, t0 = performance.now(), hz = 0, absoluto = null;
+  function onOrient(e) {
+    if (e.alpha === null && e.beta === null && e.gamma === null) {
+      poner("orient", "eventos deviceorientation", "llegan con alpha/beta/gamma en null", "bad");
+      return;
+    }
+    evs++;
+    absoluto = e.absolute;
+    const ms = performance.now() - t0;
+    if (ms > 0) hz = evs * 1000 / ms;
+    poner("critico", "giroscopio", `OK · ${hz.toFixed(0)} Hz`, "ok");
+    poner("orient", "eventos deviceorientation", `${evs} · ${hz.toFixed(1)} Hz`, "ok");
+    // absolute === false ⇒ el yaw deriva y el botón Recentrar es imprescindible
+    poner("orient", "event.absolute", String(absoluto), absoluto === false ? "warn" : "ok");
+    poner("orient", "alpha (yaw)", (e.alpha || 0).toFixed(1) + "°");
+    poner("orient", "beta (pitch)", (e.beta || 0).toFixed(1) + "°");
+    poner("orient", "gamma (roll)", (e.gamma || 0).toFixed(1) + "°");
+  }
+  function suscribir() {
+    addEventListener("deviceorientation", onOrient, true);
+    // Alternativa con magnetómetro (existe en Chrome, no en Safari). Sólo
+    // cuenta si trae valores: el evento puede llegar con todo en null.
+    addEventListener("deviceorientationabsolute", e => {
+      if (e.alpha === null && e.beta === null && e.gamma === null) return;
+      poner("orient", "deviceorientationabsolute", `llega · alpha ${(e.alpha || 0).toFixed(1)}°`, "ok");
+    }, true);
+    setTimeout(() => {
+      if (evs === 0) {
+        const motivo = isSecureContext ? "el dispositivo no reporta orientación"
+                                       : "la página NO está en contexto seguro (HTTPS)";
+        poner("critico", "giroscopio", "NO llegan eventos: " + motivo, "bad");
+        poner("orient", "eventos deviceorientation", "0 en 1,5 s", "bad");
+      }
+    }, 1500);
+  }
+  if (tipoPermiso) {
+    // iOS: hay que pedirlo desde un gesto. Se engancha al primer toque.
+    const pedir = () => DeviceOrientationEvent.requestPermission()
+      .then(r => { poner("orient", "resultado del permiso", r, r === "granted" ? "ok" : "bad"); if (r === "granted") suscribir(); })
+      .catch(e => poner("orient", "resultado del permiso", "error: " + e.message, "bad"));
+    addEventListener("click", pedir, { once: true });
+    poner("orient", "resultado del permiso", "tocá la pantalla para pedirlo", "warn");
+  } else if (typeof DeviceOrientationEvent !== "undefined") {
+    suscribir();
+  } else {
+    poner("critico", "giroscopio", "el navegador no tiene DeviceOrientationEvent", "bad");
+  }
+
+  /* ---------- WebXR ---------- */
+  poner("xr", "navigator.xr", !!navigator.xr, navigator.xr ? "ok" : "warn");
+  // En un teléfono común esto da false: Chrome retiró Cardboard/WebVR (§5.1).
+  // Si algún día diera true, mejor: el driver de P7 ya estaría listo.
+  if (navigator.xr) {
+    for (const modo of ["immersive-vr", "immersive-ar"]) {
+      navigator.xr.isSessionSupported(modo)
+        .then(v => poner("xr", modo, v, v ? "ok" : "warn"))
+        .catch(e => poner("xr", modo, "error: " + e.message, "bad"));
+    }
+  } else {
+    poner("xr", "immersive-vr", "no aplica (sin navigator.xr)", "warn");
+  }
+
+  /* ---------- WebGL ---------- */
+  (function gl() {
+    const c = document.createElement("canvas");
+    const g = c.getContext("webgl2") || c.getContext("webgl");
+    if (!g) { poner("gl", "contexto", "NO se pudo crear", "bad"); return; }
+    poner("gl", "versión", g.getParameter(g.VERSION));
+    const dbg = g.getExtension("WEBGL_debug_renderer_info");
+    // El chip real: es lo que dice si el teléfono va a poder o no
+    poner("gl", "renderer (chip real)", dbg ? g.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : "oculto");
+    poner("gl", "vendor", dbg ? g.getParameter(dbg.UNMASKED_VENDOR_WEBGL) : "oculto");
+    poner("gl", "MAX_TEXTURE_SIZE", g.getParameter(g.MAX_TEXTURE_SIZE));
+    poner("gl", "MAX_TEXTURE_IMAGE_UNITS", g.getParameter(g.MAX_TEXTURE_IMAGE_UNITS));
+    poner("gl", "MAX_RENDERBUFFER_SIZE", g.getParameter(g.MAX_RENDERBUFFER_SIZE));
+    const aniso = g.getExtension("EXT_texture_filter_anisotropic");
+    poner("gl", "anisotropía máx.", aniso ? g.getParameter(aniso.MAX_TEXTURE_MAX_ANISOTROPY_EXT) : "sin extensión");
+    // En WebGL 2 el instanciado y los índices de 32 bits son parte del core,
+    // así que getExtension devuelve null: eso NO es una carencia.
+    const webgl2 = typeof WebGL2RenderingContext !== "undefined" && g instanceof WebGL2RenderingContext;
+    const exts = ["OES_element_index_uint", "ANGLE_instanced_arrays", "EXT_color_buffer_float", "WEBGL_lose_context"];
+    poner("gl", "instanciado (InstancedMesh)", webgl2 ? "core en WebGL 2" :
+      (g.getExtension("ANGLE_instanced_arrays") ? "por extensión" : "NO disponible"),
+      (webgl2 || g.getExtension("ANGLE_instanced_arrays")) ? "ok" : "bad");
+    poner("gl", "extensiones presentes", exts.filter(e => g.getExtension(e)).join(", ") || "ninguna de la lista");
+    poner("gl", "total de extensiones", (g.getSupportedExtensions() || []).length);
+  })();
+
+  /* ---------- Gamepads ---------- */
+  function pads() {
+    const gs = navigator.getGamepads ? Array.from(navigator.getGamepads()).filter(Boolean) : [];
+    // Ojo: Chrome no muestra un gamepad hasta que se pulsa un botón (§9.10)
+    poner("pads", "conectados", gs.length || "0 (pulsá un botón del mando)");
+    gs.forEach((g, i) => poner("pads", "gamepad " + i,
+      `${g.id} · ${g.buttons.length} botones · ${g.axes.length} ejes · mapping "${g.mapping}"`));
+  }
+  pads();
+  addEventListener("gamepadconnected", pads);
+  addEventListener("gamepaddisconnected", pads);
+
+  /* ---------- Navegador ---------- */
+  poner("nav", "userAgent", navigator.userAgent);
+  poner("nav", "plataforma", navigator.platform || "—");
+  poner("nav", "núcleos (hardwareConcurrency)", navigator.hardwareConcurrency || "—");
+  poner("nav", "memoria (deviceMemory GB)", navigator.deviceMemory || "no reportada");
+  poner("nav", "pointer coarse", matchMedia("(pointer: coarse)").matches);
+  poner("nav", "idioma", navigator.language);
+  poner("nav", "fecha local", new Date().toString());
+
+  /* ---------- Cubo de referencia con fps ---------- */
+  (function cubo() {
+    const canvas = document.getElementById("cubo");
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    const escena = new THREE.Scene();
+    const cam = new THREE.PerspectiveCamera(50, 2, 0.1, 100);
+    cam.position.set(0, 0, 4);
+    const malla = new THREE.Mesh(new THREE.BoxGeometry(1.6, 1.6, 1.6),
+      new THREE.MeshPhongMaterial({ color: 0x6a9c4a, flatShading: true }));
+    escena.add(malla);
+    escena.add(new THREE.AmbientLight(0xffffff, 0.55));
+    const luz = new THREE.DirectionalLight(0xfff3da, 0.85); luz.position.set(-0.5, 1, -0.7);
+    escena.add(luz);
+    function medir() {
+      const w = canvas.clientWidth, h = canvas.clientHeight;
+      renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+      renderer.setSize(w, h, false);
+      cam.aspect = w / h; cam.updateProjectionMatrix();
+    }
+    medir(); addEventListener("resize", medir);
+    let n = 0, t = performance.now(), fpsTxt = "—";
+    (function loop(now) {
+      requestAnimationFrame(loop);
+      malla.rotation.x += 0.008; malla.rotation.y += 0.011;
+      renderer.render(escena, cam);
+      n++;
+      if (now - t > 500) {
+        fpsTxt = (n * 1000 / (now - t)).toFixed(0);
+        // La pantalla puede ser de 120 Hz: el fps del cubo es la medida base
+        // del dispositivo, no un límite de la app.
+        document.getElementById("fps").innerHTML =
+          `<div class="fila"><span class="k">fps del cubo</span><span class="v ok">${fpsTxt}</span></div>`;
+        filas["fps del cubo"] = { valor: fpsTxt, zona: "cubo" };
+        n = 0; t = now;
+      }
+    })(performance.now());
+  })();
+
+  /* ---------- Prueba de inmersión (§9.9) ---------- */
+  document.getElementById("btn-inmersion").addEventListener("click", async () => {
+    const el = document.documentElement;
+    let res = [];
+    try {
+      const req = el.requestFullscreen || el.webkitRequestFullscreen;
+      if (req) { await req.call(el); res.push("fullscreen OK"); } else res.push("sin requestFullscreen");
+    } catch (e) { res.push("fullscreen falló: " + e.message); }
+    try {
+      if (screen.orientation && screen.orientation.lock) { await screen.orientation.lock("landscape"); res.push("lock landscape OK"); }
+      else res.push("sin orientation.lock");
+    } catch (e) { res.push("lock falló: " + e.message); }
+    try {
+      if ("wakeLock" in navigator) { await navigator.wakeLock.request("screen"); res.push("wakeLock OK"); }
+      else res.push("sin wakeLock");
+    } catch (e) { res.push("wakeLock falló: " + e.message); }
+    poner("pantalla", "prueba de inmersión", res.join(" · "),
+      res.every(r => r.includes("OK")) ? "ok" : "warn");
+    pantalla();
+  });
+
+  /* ---------- Copiar todo ---------- */
+  document.getElementById("btn-copiar").addEventListener("click", async () => {
+    const lineas = ["AgroDesign VR · diagnóstico", new Date().toISOString(), "URL: " + location.href, ""];
+    for (const [k, f] of Object.entries(filas)) lineas.push(`${k}: ${f.valor}`);
+    const txt = lineas.join("\n");
+    const ta = document.getElementById("volcado");
+    ta.value = txt;
+    let ok = false;
+    // clipboard.writeText exige contexto seguro: en HTTP hay que caer al
+    // textarea + execCommand, que es justo el caso donde más se necesita.
+    try { await navigator.clipboard.writeText(txt); ok = true; } catch (e) {}
+    if (!ok) {
+      ta.style.display = "block"; ta.select();
+      try { ok = document.execCommand("copy"); } catch (e) {}
+    }
+    const av = document.getElementById("copiado");
+    av.textContent = ok ? "copiado" : "seleccioná el texto de abajo y copialo a mano";
+    av.style.display = "block";
+    setTimeout(() => { av.style.display = "none"; }, 2500);
+  });
+  </script>
+</body>
+</html>

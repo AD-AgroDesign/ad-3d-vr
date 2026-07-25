@@ -1,0 +1,15 @@
+{
+  "name": "AgroDesign · Navegador 3D VR",
+  "short_name": "AgroDesign VR",
+  "description": "Paisaje multifuncional en 3D, para visor cardboard y Oculus.",
+  "lang": "es",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#0d1a10",
+  "theme_color": "#0d1a10",
+  "icons": [
+    { "src": "img/logo.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}

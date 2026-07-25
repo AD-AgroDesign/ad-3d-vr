@@ -33,11 +33,17 @@ const DisplayFlat = {
     this.onUpdate = onUpdate; this.onAction = onAction;
     this.pitch = rig.headPitch || 0;
 
+    // Todos los handlers chequean `corriendo`: con el driver de cardboard
+    // cargado en la misma página, los dos escuchan los mismos eventos y sin
+    // el guarda se duplicaría todo (el yaw se movía al doble de velocidad y
+    // el escenario conmutaba dos veces por tecla).
     const canvas = renderer.domElement;
     canvas.addEventListener("click", () => {
+      if (!this.corriendo) return;
       if (document.pointerLockElement !== canvas) canvas.requestPointerLock();
     });
     document.addEventListener("mousemove", e => {
+      if (!this.corriendo) return;
       if (document.pointerLockElement !== canvas) return;
       rig.rig.rotation.y -= e.movementX * 0.0022;                 // yaw → RIG
       this.pitch = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01,
@@ -46,7 +52,7 @@ const DisplayFlat = {
     });
 
     addEventListener("keydown", e => {
-      if (e.repeat) return;
+      if (!this.corriendo || e.repeat) return;
       this.teclas[e.code] = true;
       const acc = ACCIONES[e.code];
       if (acc) { e.preventDefault(); if (this.onAction) this.onAction(acc); }

@@ -93,6 +93,69 @@ const Rig = {
     this.modo = "dron";
   },
 
+  /* Cabeza nivelada mirando al horizonte. Es la pose de arranque de VR: en
+     cardboard y en XR el pitch lo escribe la cabeza real, así que dejarle un
+     pitch de software heredado del mouse look sería un horizonte torcido. */
+  nivelar() {
+    this.headPitch = 0;
+    this.camera.rotation.set(0, 0, 0);
+  },
+
+  /* Pose de dron sobre el centro del campo, nivelada (§9.11.7).
+
+     Es el default en teléfono, y no por gusto: con radioMax 400 m del tier
+     `phone` la vista aérea sale SIN vegetación (medido en el Android del
+     dueño el 2026-07-24: 32 k triángulos, una escena casi vacía). A altura
+     de dron el presupuesto y la imagen son los reales. */
+  poseDron(extent, opts = {}) {
+    const rumbo = opts.rumbo != null ? opts.rumbo : 15;
+    this.setPosicion((extent.minX + extent.maxX) / 2, (extent.minZ + extent.maxZ) / 2);
+    this.setAlturaOjo(opts.altura != null ? opts.altura : this.alturaDron);
+    this.setRumbo(rumbo);
+    this.nivelar();
+    this.modo = "dron";
+    return { pose: "dron", rumbo, altura: this.alturaOjo() };
+  },
+
+  /* Pose dentro del corredor más largo del escenario, a altura de dron y
+     mirando a lo largo de su eje.
+
+     Sirve dos cosas: es la vista que muestra el activo visual del proyecto
+     (las matas con punta lila) y es la única forma de medir el presupuesto
+     real del teléfono sin depender del input, que recién llega en P5.
+
+     Reusa corridorCenterline() de core-route.js tal cual (devuelve null si
+     el eje mide menos de 300 m). El feature de Carmen con 0 polígonos se
+     filtra antes de tocarlo: es la trampa 5 de P3 (§3.5). */
+  poseCorredor(fc, opts = {}) {
+    let mejor = null;
+    for (const f of fc.features) {
+      const cls = f.properties._cls;
+      if (cls !== "corr-herb" && cls !== "corr-le") continue;
+      if (!f.geometry || !f.geometry.coordinates.length) continue;
+      const cl = corridorCenterline(f);
+      if (cl && (!mejor || cl.lenM > mejor.lenM)) mejor = cl;
+    }
+    if (!mejor) return null;
+
+    const path = mejor.path;
+    const i = Math.floor(path.length / 2);
+    const [lon, lat] = path[i];
+    const [x, z] = lonLatToScene(lon, lat);
+    // Rumbo del eje en ese punto, con la métrica local kx/ky de
+    // core-route.js (§6: esas funciones trabajan así a propósito).
+    const a = path[Math.max(0, i - 1)], b = path[Math.min(path.length - 1, i + 1)];
+    const kx = 111320 * Math.cos(lat * Math.PI / 180), ky = 110540;
+    const rumbo = Math.atan2((b[0] - a[0]) * kx, (b[1] - a[1]) * ky) * 180 / Math.PI;
+
+    this.setPosicion(x, z);
+    this.setAlturaOjo(opts.altura != null ? opts.altura : this.alturaDron);
+    this.setRumbo(rumbo);
+    this.nivelar();
+    this.modo = "dron";
+    return { pose: "corredor", rumbo: +rumbo.toFixed(1), largoM: Math.round(mejor.lenM), altura: this.alturaOjo() };
+  },
+
   setModo(modo) {
     this.modo = modo;
     this.setAlturaOjo(modo === "suelo" ? this.eyeHeight : this.alturaDron);

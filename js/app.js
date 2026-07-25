@@ -10,14 +10,25 @@
      ?campo=<id>   campo a cargar          ?debug   expone window.__vr
      ?fps          HUD de medición         ?z=<n>   fuerza el zoom del atlas
      ?alt=<m>      altura inicial del ojo  ?sinsat  arranca sin satélite
+     ?modo=flat|cardboard                  ?tier=phone|quest|desktop
+     ?pose=aerea|dron|corredor             ?escenario=inicial|multi
 
-   El reporte de verificación del núcleo de datos vive en verify.html.
+   El reporte de verificación del núcleo de datos vive en verify.html, y el
+   diagnóstico del dispositivo en diag.html.
    ============================================================ */
 "use strict";
 
 const easeOutCubic = x => 1 - Math.pow(1 - x, 3);
 
 let renderer = null, scene = null, TilesFondo = null;
+let driver = null;
+
+/* Modo de display por query string (§5.3). El default es `flat` también en
+   teléfono, a propósito: entrar en estéreo exige un GESTO del usuario para
+   la pantalla completa, el bloqueo de orientación y el wake lock (§9.9), así
+   que el camino normal es el botón "Entrar en VR". `?modo=cardboard` arranca
+   directo en estéreo para el guion de prueba física de §11.3. */
+const MODO = params.get("modo") || "flat";
 
 /* ---------- Opacidad y crecimiento (equivalentes a main.js:777-790) ---------- */
 function applyOpacity(key, t) {
@@ -89,6 +100,82 @@ function onResize() {
   Rig.camera.updateProjectionMatrix();
 }
 
+function aviso(html) {
+  const el = document.getElementById("aviso");
+  if (!el) return;
+  if (!html) { el.style.display = "none"; el.innerHTML = ""; return; }
+  el.style.display = "block";
+  el.innerHTML = html;
+}
+
+/* ---------- Poses iniciales ----------
+
+   `aerea` es la vista del proyecto original (sobrevuelo del campo entero) y
+   sigue siendo el default en escritorio. En teléfono NO sirve: con el
+   radioMax de 400 m del tier `phone` la vista aérea se ve sin vegetación
+   (medido en el Android del dueño: 32 k triángulos, una escena casi vacía).
+   Por eso en `phone` y en cardboard el default es la pose de dron dentro del
+   corredor más largo, que además es la pose de VR y la única forma de medir
+   el presupuesto real sin input (que recién llega en P5). */
+function aplicarPose(nombre, extent) {
+  const fc = state.data[state.scenario] || state.data.multi;
+  if (nombre === "corredor") {
+    const r = Rig.poseCorredor(fc);
+    if (r) return r;
+    console.warn("pose=corredor: no hay corredor con eje > 300 m; se usa la pose de dron");
+    nombre = "dron";
+  }
+  if (nombre === "dron") return Rig.poseDron(extent);
+  Rig.home(extent, params.has("alt") ? { altura: +params.get("alt") } : {});
+  return { pose: "aerea", altura: Rig.alturaOjo() };
+}
+
+/* ---------- Drivers de display ----------
+   Los dos drivers comparten el MISMO rig y las mismas callbacks: cambiar de
+   modo es parar uno y arrancar el otro (§5.3b). */
+function usarDriver(nuevo) {
+  if (driver === nuevo) return;
+  if (driver) driver.stop();
+  driver = nuevo;
+  document.body.classList.toggle("estereo", nuevo.label === "cardboard");
+  Perf.espejo(nuevo.label === "cardboard");
+  Perf.linea = "";
+  driver.start();
+  actualizarBotones();
+}
+
+/* Tiene que llamarse DESDE el gesto del usuario: la pantalla completa, el
+   bloqueo de orientación y el wake lock lo exigen (§9.9). */
+async function entrarVR() {
+  // Desde una vista aérea, entrar en estéreo deja el campo 900 m abajo y
+  // fuera de cuadro: se baja a altura de dron conservando la posición.
+  if (Rig.alturaOjo() > 60) { Rig.setAlturaOjo(Rig.alturaDron); Chunks.invalidar(); }
+  usarDriver(DisplayCardboard);
+  await Inmersion.entrar();
+  actualizarBotones();
+}
+
+async function salirVR() {
+  usarDriver(DisplayFlat);
+  aviso(null);
+  await Inmersion.salir();
+  actualizarBotones();
+}
+
+function actualizarBotones() {
+  const enVR = driver === DisplayCardboard;
+  const btnVR = document.getElementById("btn-vr");
+  const btnRec = document.getElementById("btn-recentrar");
+  const btnSalir = document.getElementById("btn-salir");
+  if (!btnVR) return;
+  // en cardboard el botón principal pasa a ser el de pantalla completa, y
+  // desaparece cuando ya se está en pantalla completa
+  btnVR.textContent = enVR ? "Pantalla completa" : "Entrar en VR";
+  btnVR.hidden = enVR && Inmersion.enFullscreen();
+  btnRec.hidden = !enVR;
+  btnSalir.hidden = !enVR;
+}
+
 /* ---------- Arranque ---------- */
 (async function main() {
   try {
@@ -149,43 +236,84 @@ function onResize() {
       Veg.build(scene, key);
     }
 
-    // Estado inicial: paisaje actual visible y crecido, multifuncional en 0
-    state.scenario = "inicial";
-    applyOpacity("inicial", 1); applyGrowth("inicial", 1);
-    applyOpacity("multi", 0); applyGrowth("multi", 0);
+    // Estado inicial: un escenario visible y crecido, el otro en 0.
+    // ?escenario=multi arranca en el Paisaje Multifuncional: es lo que hace
+    // falta para medir el peor caso en el teléfono sin depender del input.
+    state.scenario = params.get("escenario") === "multi" ? "multi" : "inicial";
+    const otro = state.scenario === "multi" ? "inicial" : "multi";
+    applyOpacity(state.scenario, 1); applyGrowth(state.scenario, 1);
+    applyOpacity(otro, 0); applyGrowth(otro, 0);
 
     Rig.alturaDron = (state.campo.vr && state.campo.vr.alturaDron) || 18;
-    Rig.home(extent, params.has("alt") ? { altura: +params.get("alt") } : {});
+    const enMovil = Perf.tier === "phone" || MODO === "cardboard";
+    const poseInfo = aplicarPose(params.get("pose") || (enMovil ? "corredor" : "aerea"), extent);
+    console.log("pose inicial:", poseInfo);
     actualizarEtiqueta();
-    Perf.init(document.getElementById("hud"), DEBUG);
+    Perf.init(document.getElementById("hud"), DEBUG, document.getElementById("hud2"));
 
-    DisplayFlat.init(renderer, scene, Rig, {
+    /* Las dos callbacks son las mismas para los dos drivers: el que cambia
+       es cómo se presenta el frame, no lo que pasa en la escena. */
+    const cbs = {
       // `msFrame` es el tiempo REAL del frame: el driver manda por separado
       // el que usa la locomoción (topeado) y el que se mide (crudo)
       onUpdate: (msFrame, now) => {
         Veg.tick(now / 1000);          // reloj del viento
         Sky.update(Rig);
         Chunks.update(Rig.rig.position, now);
+        if (Perf.activo && driver === DisplayCardboard) {
+          const c = Cabeza.fuente === "sensores"
+            ? `cabeza sensores ${Cabeza.hz.toFixed(0)} Hz${Cabeza.absoluto === false ? " (deriva)" : ""}`
+            : `<span class="warn">cabeza ${Cabeza.fuente}</span>`;
+          Perf.linea = `estéreo · ${c}`;
+        }
         Perf.frame(renderer, msFrame);
       },
       onAction: acc => {
         if (acc === "toggleScenario") setScenario(state.scenario === "inicial" ? "multi" : "inicial");
-        else if (acc === "home") { Rig.home(extent); Chunks.invalidar(); }
+        else if (acc === "home") { aplicarPose("aerea", extent); Chunks.invalidar(); }
         else if (acc === "modo") { Rig.alternarModo(); Chunks.invalidar(); }
+        else if (acc === "recenter" && driver === DisplayCardboard) DisplayCardboard.recentrar();
       }
+    };
+
+    DisplayFlat.init(renderer, scene, Rig, cbs);
+    DisplayCardboard.init(renderer, scene, Rig, Object.assign({ onAviso: aviso }, cbs));
+
+    /* Botones. Con el visor puesto no se puede tocar la pantalla, así que
+       estos son para ANTES de meter el teléfono; el mando llega en P5. */
+    document.getElementById("btn-vr").addEventListener("click", () => {
+      if (driver === DisplayCardboard) Inmersion.entrar().then(actualizarBotones);
+      else entrarVR();
     });
-    DisplayFlat.start();
+    document.getElementById("btn-recentrar").addEventListener("click", () => DisplayCardboard.recentrar());
+    document.getElementById("btn-salir").addEventListener("click", salirVR);
+    // Si el usuario sale de pantalla completa con el gesto del sistema, salir
+    // del estéreo en vez de quedar con la imagen doble cortada por las barras
+    // del navegador (§9.9).
+    for (const ev of ["fullscreenchange", "webkitfullscreenchange"]) {
+      document.addEventListener(ev, () => {
+        if (driver === DisplayCardboard && Inmersion.activa && !Inmersion.enFullscreen()) salirVR();
+        else actualizarBotones();
+      });
+    }
+
+    if (MODO === "cardboard") usarDriver(DisplayCardboard);
+    else usarDriver(DisplayFlat);
     carga(null);
 
     if (DEBUG) {
       window.__vr = {
-        state, renderer, scene, Rig, Sky, Tiles, TilesFondo, Ground, Veg, Perf, Chunks, DisplayFlat,
+        state, renderer, scene, Rig, Sky, Tiles, TilesFondo, Ground, Veg, Perf, Chunks,
+        DisplayFlat, DisplayCardboard, Cabeza, Inmersion,
         setScenario, applyOpacity, applyGrowth, extent,
+        aplicarPose: n => aplicarPose(n, extent), entrarVR, salirVR, usarDriver,
         lonLatToScene, sceneToLonLat, projInfo,
         info: () => ({
           campo: state.campo.id, escenario: state.scenario,
+          modo: driver ? driver.label : null,
           tiles: Tiles.info, suelo: Ground.info(), veg: Veg.info(),
           chunks: Chunks.info(), perf: Perf.snapshot(renderer),
+          estereo: DisplayCardboard.info(),
           camara: {
             x: +Rig.rig.position.x.toFixed(1), z: +Rig.rig.position.z.toFixed(1),
             altura: +Rig.alturaOjo().toFixed(1), rumbo: +Rig.rumbo().toFixed(1)

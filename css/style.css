@@ -57,7 +57,52 @@ html, body {
   background: var(--panel); padding: 7px 12px; border-radius: 8px;
   font: 12px/1.5 ui-monospace, monospace; text-align: right;
 }
-#hud .warn { color: var(--gold); }
+#hud2 {
+  position: fixed; z-index: 10; display: none;
+  background: var(--panel); padding: 6px 10px; border-radius: 8px;
+  font: 11px/1.45 ui-monospace, monospace; text-align: center;
+}
+#hud .warn, #hud2 .warn { color: var(--gold); }
+
+/* --- Modo cardboard (§9.7) ---
+   El canvas queda partido en dos mitades, una por ojo, así que cualquier
+   overlay de una esquina cae fuera de lo que se ve por las lentes. El HUD se
+   duplica al centro de cada mitad y el resto del chrome de escritorio se
+   apaga. Los botones van al borde inferior, sobre la costura: no se pueden
+   tocar con el visor puesto, y ahí no tapan la escena. */
+body.estereo #escenario,
+body.estereo #ayuda { display: none !important; }
+
+body.estereo #hud,
+body.estereo #hud2 {
+  top: 22%; right: auto; text-align: center;
+  transform: translateX(-50%);
+}
+body.estereo #hud { left: 25%; font-size: 11px; }
+body.estereo #hud2 { left: 75%; }
+
+/* --- Botones del modo VR --- */
+#vr-botones {
+  position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%);
+  z-index: 20; display: flex; gap: 8px;
+}
+#vr-botones button {
+  font: 600 14px/1 -apple-system, Segoe UI, Roboto, system-ui, sans-serif;
+  color: var(--ink); background: rgba(30, 54, 38, .92);
+  border: 1px solid #3d6b47; border-radius: 999px; padding: 12px 20px;
+  cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+#vr-botones button:active { background: #3d6b47; }
+#vr-botones button[hidden] { display: none; }
+
+/* Aviso (p. ej. "no se detecta el giroscopio"). Va al centro-abajo para que
+   se lea con el teléfono en la mano, que es cuando importa. */
+#aviso {
+  position: fixed; bottom: 64px; left: 50%; transform: translateX(-50%);
+  z-index: 25; display: none; max-width: min(560px, 88vw); text-align: center;
+  background: rgba(40, 26, 10, .92); border: 1px solid #7a5c22; border-radius: 10px;
+  padding: 10px 14px; font-size: 13px; line-height: 1.5;
+}
 
 /* Atribución obligatoria de la imagen satelital (§9.1) */
 #credito {
