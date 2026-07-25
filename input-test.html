@@ -1,0 +1,359 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <title>Mapeo del mando · AgroDesign VR</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <link rel="icon" type="image/png" href="img/logo.png">
+  <style>
+    /* Letra grande y legible con el visor puesto o sin él (§9.10). Igual que
+       diag.html, esta página es autosuficiente: no depende de ningún js/ del
+       proyecto, así que sirve incluso si la app principal está rota. */
+    :root { --ink: #e8efe0; --muted: #a8c0ab; --ok: #8bc34a; --bad: #e57373; --gold: #e8d9a0; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; }
+    body {
+      padding: 12px 12px 78px; background: #0d1a10; color: var(--ink);
+      font: 15px/1.45 -apple-system, Segoe UI, Roboto, system-ui, sans-serif;
+      /* OJO: acá NO va `touch-action: none` (sí va en la app, §9.9). En un
+         teléfono apaisado la página no entra en pantalla y hay que poder
+         desplazarla con el dedo para leer el registro. Sólo se frena el
+         pull-to-refresh, que molestaría al apretar botones. */
+      user-select: none; overscroll-behavior-y: contain;
+    }
+    h1 { font-size: 19px; margin: 0 0 2px; }
+    h1 span { color: var(--gold); }
+    p.sub { color: var(--muted); margin: 0 0 10px; font-size: 13px; }
+    .cols { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-start; }
+    section { background: rgba(255,255,255,.04); border-radius: 10px; padding: 9px 11px; margin-bottom: 10px; flex: 1 1 320px; }
+    h2 { font-size: 14px; margin: 0 0 7px; color: var(--gold); }
+    .fila { display: flex; gap: 10px; justify-content: space-between; padding: 2px 0; }
+    .k { color: var(--muted); }
+    .v { font-family: ui-monospace, monospace; text-align: right; word-break: break-word; }
+    .ok { color: var(--ok); } .bad { color: var(--bad); } .warn { color: var(--gold); }
+    #estado { font-size: 16px; font-weight: 600; padding: 8px 11px; border-radius: 10px;
+      background: rgba(122, 92, 34, .35); border: 1px solid #7a5c22; margin-bottom: 10px; }
+    #estado.listo { background: rgba(58, 122, 34, .3); border-color: #4d7a22; }
+    /* Barras de ejes: se leen de un vistazo, que es lo que hace falta para
+       distinguir un stick de un gatillo (el gatillo descansa en -1). */
+    .eje { display: grid; grid-template-columns: 62px 1fr 64px; gap: 7px; align-items: center; margin: 3px 0; font-family: ui-monospace, monospace; font-size: 13px; }
+    .barra { position: relative; height: 12px; background: #12241a; border-radius: 6px; overflow: hidden; }
+    .barra i { position: absolute; top: 0; bottom: 0; background: #6a9c4a; }
+    .barra u { position: absolute; top: 0; bottom: 0; width: 1px; left: 50%; background: rgba(255,255,255,.35); }
+    .btns { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+    .btn-ind { font: 12px ui-monospace, monospace; padding: 4px 7px; border-radius: 6px; background: #12241a; border: 1px solid #24402c; }
+    .btn-ind.on { background: #6a9c4a; color: #0d1a10; font-weight: 700; }
+    .btn-ind.visto { border-color: #6a9c4a; }
+    #log { font: 12px/1.5 ui-monospace, monospace; max-height: 42vh; overflow-y: auto; touch-action: pan-y; }
+    #log div { padding: 1px 0; border-bottom: 1px solid rgba(255,255,255,.05); white-space: pre-wrap; }
+    #log .t { color: var(--muted); }
+    #resumen { font: 13px/1.6 ui-monospace, monospace; }
+    #barra-inf { position: fixed; bottom: 0; left: 0; right: 0; display: flex; gap: 8px; padding: 9px 12px;
+      background: rgba(10,20,13,.96); border-top: 1px solid rgba(255,255,255,.1); }
+    button { flex: 1; font: 600 15px/1 inherit; color: var(--ink); background: #1e3626;
+      border: 1px solid #3d6b47; border-radius: 999px; padding: 13px 8px; cursor: pointer;
+      -webkit-tap-highlight-color: transparent; }
+    button:active { background: #3d6b47; }
+    #copiado { position: fixed; bottom: 68px; left: 50%; transform: translateX(-50%); display: none;
+      background: #1e3626; border: 1px solid #3d6b47; border-radius: 8px; padding: 6px 12px; font-size: 13px; }
+    /* El textarea es el plan B para copiar cuando falla la Clipboard API
+       (pasa fuera de HTTPS): tiene que ser seleccionable a mano. */
+    textarea { width: 100%; height: 130px; display: none; margin-top: 8px; font: 11px ui-monospace, monospace;
+      user-select: text; -webkit-user-select: text; }
+  </style>
+</head>
+<body>
+  <h1>Mapeo del mando <span>· AgroDesign VR</span></h1>
+  <p class="sub">Apretá <b>todos</b> los botones del mando, de a uno y despacio. Después movés cada
+    stick y cada gatillo hasta el tope. Al final tocá <b>Copiar log</b> y mandame el texto.</p>
+
+  <div id="estado">Pulsá cualquier botón del mando…</div>
+
+  <div class="cols">
+    <section style="flex:1 1 340px">
+      <h2>Mandos conectados</h2>
+      <div id="pads"></div>
+    </section>
+    <section style="flex:1 1 340px">
+      <h2>Entradas distintas vistas <span id="cuenta" class="k"></span></h2>
+      <div id="resumen">— todavía nada —</div>
+    </section>
+  </div>
+
+  <section>
+    <h2>Registro (lo más nuevo arriba)</h2>
+    <div id="log"></div>
+  </section>
+
+  <textarea id="volcado" readonly></textarea>
+  <div id="copiado">copiado</div>
+  <div id="barra-inf">
+    <button id="btn-limpiar" type="button">Limpiar</button>
+    <button id="btn-copiar" type="button">Copiar log</button>
+  </div>
+
+  <script>
+  "use strict";
+  /* ============================================================
+     input-test.html — Página de aprendizaje del mando Bluetooth (§9.10).
+
+     La trampa principal del proyecto: muchos mandos "VR" baratos (Shinecon y
+     clones) NO se presentan como gamepad. Según la combinación de botones con
+     la que arrancan, actúan como TECLADO (mandan Enter, flechas, Escape,
+     teclas de volumen o de reproducción), como MOUSE, o como gamepad HID.
+     Por eso acá se escucha TODO: gamepad, teclado, mouse, puntero, touch y
+     wheel. Con este log se escribe el mapeo real de input.js.
+
+     **No adivinar el mapeo.** Esta página existe para no tener que hacerlo.
+     ============================================================ */
+
+  const T0 = performance.now();
+  const t = () => ((performance.now() - T0) / 1000).toFixed(2).padStart(7, " ");
+
+  const MAX_DOM = 400;        // líneas visibles (más que esto no se navega)
+  const MAX_TXT = 2500;       // líneas guardadas para copiar
+  const lineas = [];          // log completo, en orden cronológico
+  const vistas = new Map();   // clave → { n, detalle, min, max }
+  const logEl = document.getElementById("log");
+
+  function log(fuente, detalle, clase) {
+    const linea = `${t()}  ${fuente.padEnd(9)} ${detalle}`;
+    lineas.push(linea);
+    if (lineas.length > MAX_TXT) lineas.shift();
+    const div = document.createElement("div");
+    div.innerHTML = `<span class="t">${t()}</span> <b>${fuente}</b> <span class="${clase || ""}">${detalle}</span>`;
+    logEl.insertBefore(div, logEl.firstChild);
+    while (logEl.childNodes.length > MAX_DOM) logEl.removeChild(logEl.lastChild);
+  }
+
+  /* Resumen: es el entregable de verdad. Para cada entrada distinta guarda
+     cuántas veces se vio y, en los ejes, el recorrido completo (un gatillo
+     descansa en -1 y llega a +1: sin el mínimo no se distingue de un stick). */
+  function anotar(clave, detalle, valor) {
+    let v = vistas.get(clave);
+    if (!v) { v = { n: 0, detalle, min: Infinity, max: -Infinity }; vistas.set(clave, v); }
+    v.n++;
+    v.detalle = detalle;
+    if (typeof valor === "number") { v.min = Math.min(v.min, valor); v.max = Math.max(v.max, valor); }
+    pintarResumen();
+  }
+
+  let pintarPedido = false;
+  function pintarResumen() {
+    if (pintarPedido) return;
+    pintarPedido = true;                    // el resumen se repinta a lo sumo una vez por frame
+    requestAnimationFrame(() => {
+      pintarPedido = false;
+      const el = document.getElementById("resumen");
+      if (!vistas.size) { el.textContent = "— todavía nada —"; return; }
+      el.innerHTML = [...vistas.entries()].map(([k, v]) => {
+        const rec = isFinite(v.min) ? ` · rango ${v.min.toFixed(2)} → ${v.max.toFixed(2)}` : "";
+        return `<div><b>${k}</b> ×${v.n} — ${v.detalle}${rec}</div>`;
+      }).join("");
+      document.getElementById("cuenta").textContent = `(${vistas.size})`;
+    });
+  }
+
+  /* ---------- Teclado ----------
+     `code` es lo que usa el mapeo de input.js (es físico y no cambia con el
+     idioma); `key` y `keyCode` van igual porque algunos mandos mandan teclas
+     raras que sólo se distinguen por ahí. */
+  function tecla(e, tipo) {
+    const d = `code=${e.code || "?"} key=${JSON.stringify(e.key)} keyCode=${e.keyCode}` +
+      (e.repeat ? " (repeat)" : "");
+    log("teclado", `${tipo} ${d}`, tipo === "keydown" ? "ok" : "");
+    if (tipo === "keydown" && !e.repeat) anotar("tecla " + (e.code || e.key), d);
+    // Se frena el scroll y el zoom de las teclas de navegación, pero NO se
+    // toca Escape (tiene que poder salir de pantalla completa) ni las teclas
+    // de volumen/multimedia, que el navegador no siempre deja interceptar.
+    if (["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Tab", "Enter"].includes(e.code))
+      e.preventDefault();
+  }
+  addEventListener("keydown", e => tecla(e, "keydown"));
+  addEventListener("keyup", e => tecla(e, "keyup"));
+
+  /* ---------- Mouse, puntero y touch ----------
+     Un mando en modo mouse mueve un cursor: el mousemove se loguea espaciado
+     para no inundar el registro, pero el primero se marca igual. */
+  let ultMove = 0;
+  addEventListener("mousemove", e => {
+    const ahora = performance.now();
+    if (ahora - ultMove < 400) return;
+    ultMove = ahora;
+    log("mouse", `mousemove x=${e.clientX} y=${e.clientY} Δ=(${e.movementX},${e.movementY})`);
+    anotar("mouse move", "el mando mueve un cursor");
+  });
+  for (const tipo of ["mousedown", "mouseup", "click", "dblclick", "auxclick", "contextmenu"]) {
+    addEventListener(tipo, e => {
+      log("mouse", `${tipo} button=${e.button} buttons=${e.buttons} x=${e.clientX} y=${e.clientY}`, "ok");
+      anotar(`mouse ${tipo} b${e.button}`, `botón ${e.button} del mouse`);
+      if (tipo === "contextmenu") e.preventDefault();
+    });
+  }
+  addEventListener("wheel", e => {
+    log("wheel", `deltaY=${e.deltaY.toFixed(1)} deltaX=${e.deltaX.toFixed(1)}`);
+    anotar("wheel", "rueda / scroll del mando");
+    e.preventDefault();
+  }, { passive: false });
+  for (const tipo of ["touchstart", "touchend", "touchmove"]) {
+    let ultTouch = 0;
+    addEventListener(tipo, e => {
+      const ahora = performance.now();
+      if (tipo === "touchmove" && ahora - ultTouch < 400) return;
+      ultTouch = ahora;
+      const p = e.touches[0] || e.changedTouches[0];
+      log("touch", `${tipo} dedos=${e.touches.length}` + (p ? ` x=${Math.round(p.clientX)} y=${Math.round(p.clientY)}` : ""));
+      if (tipo === "touchstart") anotar("touch", `toques en la pantalla (${e.touches.length} dedo/s)`);
+    }, { passive: true });
+  }
+  addEventListener("pointerdown", e => {
+    log("puntero", `pointerdown tipo=${e.pointerType} botón=${e.button} presión=${e.pressure.toFixed(2)}`);
+    anotar("puntero " + e.pointerType, "pointerdown");
+  });
+
+  /* ---------- Gamepad API ----------
+     Dos hechos que cuestan tiempo si no se saben:
+     1. Chrome NO muestra un gamepad hasta que se pulsa un botón.
+     2. getGamepads() devuelve SNAPSHOTS, no objetos vivos: hay que pollear
+        en el loop y comparar contra el estado anterior.
+     Zona muerta de referencia: 0,15–0,20 (§9.10). Acá NO se aplica: se
+     muestran los valores crudos, porque justamente lo que hay que averiguar
+     es cuánto ruido tiene el mando en reposo. */
+  const DEADZONE_REF = 0.18;
+  const previo = {};          // index → { botones: [], ejes: [] }
+  let huboGamepad = false;
+
+  addEventListener("gamepadconnected", e => {
+    log("gamepad", `CONECTADO índice=${e.gamepad.index} id="${e.gamepad.id}" ` +
+      `botones=${e.gamepad.buttons.length} ejes=${e.gamepad.axes.length} mapping="${e.gamepad.mapping}"`, "ok");
+    anotar(`gamepad ${e.gamepad.index}`, e.gamepad.id);
+  });
+  addEventListener("gamepaddisconnected", e => {
+    log("gamepad", `DESCONECTADO índice=${e.gamepad.index} id="${e.gamepad.id}"`, "bad");
+  });
+
+  function pintarPads(gps) {
+    const cont = document.getElementById("pads");
+    if (!gps.length) {
+      cont.innerHTML = `<div class="fila"><span class="k">detectados</span><span class="v warn">0</span></div>` +
+        `<p class="sub" style="margin:6px 0 0">Si después de apretar todos los botones sigue en 0, el mando
+         <b>no es un gamepad</b>: mirá si aparecen líneas de <b>teclado</b> o de <b>mouse</b> en el registro.
+         Ese es el caso más común (§9.10) y no es un problema, cambia el mapeo.</p>`;
+      return;
+    }
+    cont.innerHTML = "";
+    for (const g of gps) {
+      const box = document.createElement("div");
+      box.style.marginBottom = "10px";
+      const est = previo[g.index] || { vistos: new Set() };
+      box.innerHTML =
+        `<div class="fila"><span class="k">índice ${g.index}</span><span class="v ok">${g.buttons.length} botones · ${g.axes.length} ejes</span></div>` +
+        `<div class="fila"><span class="k">id</span><span class="v">${g.id}</span></div>` +
+        `<div class="fila"><span class="k">mapping</span><span class="v ${g.mapping === "standard" ? "ok" : "warn"}">${g.mapping || "(vacío: todo es específico del dispositivo)"}</span></div>`;
+      const btns = document.createElement("div");
+      btns.className = "btns";
+      g.buttons.forEach((b, i) => {
+        const d = document.createElement("span");
+        d.className = "btn-ind" + (b.pressed ? " on" : "") + (est.vistos && est.vistos.has("b" + i) ? " visto" : "");
+        d.textContent = `b${i}${b.value > 0 && b.value < 1 ? " " + b.value.toFixed(2) : ""}`;
+        btns.appendChild(d);
+      });
+      box.appendChild(btns);
+      g.axes.forEach((v, i) => {
+        const fila = document.createElement("div");
+        fila.className = "eje";
+        const ancho = Math.abs(v) * 50, izq = v < 0 ? 50 - ancho : 50;
+        fila.innerHTML = `<span>eje ${i}</span>` +
+          `<span class="barra"><u></u><i style="left:${izq}%;width:${ancho}%"></i></span>` +
+          `<span class="${Math.abs(v) > DEADZONE_REF ? "ok" : "k"}">${v.toFixed(3)}</span>`;
+        box.appendChild(fila);
+      });
+      cont.appendChild(box);
+    }
+  }
+
+  function poll() {
+    requestAnimationFrame(poll);
+    const gps = navigator.getGamepads ? Array.from(navigator.getGamepads()).filter(Boolean) : [];
+    if (gps.length && !huboGamepad) {
+      huboGamepad = true;
+      const est = document.getElementById("estado");
+      est.className = "listo";
+      est.textContent = "Mando detectado. Apretá los botones de a uno y movés los sticks al tope.";
+    }
+    for (const g of gps) {
+      let p = previo[g.index];
+      if (!p) p = previo[g.index] = { botones: [], ejes: [], vistos: new Set() };
+      g.buttons.forEach((b, i) => {
+        const antes = p.botones[i];
+        if (antes === undefined) { p.botones[i] = b.value; return; }
+        // los botones analógicos (gatillos) informan `value`, no sólo `pressed`
+        if (b.pressed !== antes >= 0.5 || Math.abs(b.value - antes) > 0.15) {
+          log("gamepad", `gp${g.index} botón ${i} ${b.pressed ? "ABAJO" : "arriba"} value=${b.value.toFixed(2)}`,
+            b.pressed ? "ok" : "");
+          if (b.pressed) { anotar(`gp${g.index} botón ${i}`, "botón del mando", b.value); p.vistos.add("b" + i); }
+        }
+        p.botones[i] = b.value;
+      });
+      g.axes.forEach((v, i) => {
+        const antes = p.ejes[i];
+        if (antes === undefined) { p.ejes[i] = v; anotar(`gp${g.index} eje ${i}`, "eje (reposo al abrir)", v); return; }
+        if (Math.abs(v - antes) > 0.09) {
+          log("gamepad", `gp${g.index} eje ${i} = ${v.toFixed(3)}`);
+          anotar(`gp${g.index} eje ${i}`, "eje del mando", v);
+          p.ejes[i] = v;
+        }
+      });
+    }
+    pintarPads(gps);
+  }
+  requestAnimationFrame(poll);
+
+  /* ---------- Copiar / limpiar ---------- */
+  function texto() {
+    const cab = [
+      "AgroDesign VR · mapeo del mando",
+      new Date().toISOString(),
+      "URL: " + location.href,
+      "userAgent: " + navigator.userAgent,
+      "gamepads al copiar: " + (navigator.getGamepads
+        ? Array.from(navigator.getGamepads()).filter(Boolean)
+            .map(g => `[${g.index}] "${g.id}" ${g.buttons.length}b/${g.axes.length}e mapping="${g.mapping}"`).join(" | ") || "ninguno"
+        : "sin API"),
+      "",
+      "=== ENTRADAS DISTINTAS VISTAS (esto es lo que define el mapeo) ==="
+    ];
+    for (const [k, v] of vistas) {
+      cab.push(`${k} ×${v.n} — ${v.detalle}` + (isFinite(v.min) ? ` · rango ${v.min.toFixed(2)} → ${v.max.toFixed(2)}` : ""));
+    }
+    cab.push("", `=== REGISTRO (${lineas.length} líneas, segundos desde que abrió la página) ===`);
+    return cab.concat(lineas).join("\n");
+  }
+
+  document.getElementById("btn-copiar").addEventListener("click", async () => {
+    const txt = texto();
+    const ta = document.getElementById("volcado");
+    ta.value = txt;
+    let ok = false;
+    // clipboard.writeText exige contexto seguro: en HTTP hay que caer al
+    // textarea + execCommand, que es justo el caso donde más se necesita.
+    try { await navigator.clipboard.writeText(txt); ok = true; } catch (e) {}
+    if (!ok) { ta.style.display = "block"; ta.select(); try { ok = document.execCommand("copy"); } catch (e) {} }
+    const av = document.getElementById("copiado");
+    av.textContent = ok ? `copiado (${lineas.length} líneas)` : "seleccioná el texto de abajo y copialo a mano";
+    av.style.display = "block";
+    setTimeout(() => { av.style.display = "none"; }, 2600);
+  });
+
+  document.getElementById("btn-limpiar").addEventListener("click", () => {
+    lineas.length = 0; vistas.clear(); logEl.innerHTML = "";
+    document.getElementById("volcado").style.display = "none";
+    pintarResumen();
+    log("sistema", "registro limpiado");
+  });
+
+  log("sistema", `página abierta · ${navigator.userAgent}`);
+  log("sistema", `getGamepads: ${!!navigator.getGamepads} · contexto seguro: ${isSecureContext}`);
+  </script>
+</body>
+</html>
