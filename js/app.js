@@ -112,12 +112,20 @@ function onResize() {
     carga("Cargando el campo…", 0.05);
     await loadCampos();
     document.title = `AgroDesign · Navegador 3D VR · ${state.campo.nombre}`;
+    // El tier se aplica ANTES de loadData(): pisa los topes de generación de
+    // matas, porque cada instancia cuesta memoria y tiempo de construcción
+    // aunque el culling por radio después no la dibuje (§9.5).
+    Perf.aplicarTier();
+    if (Perf.dial.pixelRatio) renderer.setPixelRatio(Perf.dial.pixelRatio);
     await loadData();
     const extent = sceneExtent();
 
     if (!params.has("sinsat")) {
       carga("Bajando imagen satelital…", 0.1);
-      const z = params.has("z") ? +params.get("z") : (state.campo.maxzoom || 17);
+      // el zoom del atlas lo limitan dos cosas: hasta dónde tiene imagen Esri
+      // en ese campo, y el dial del tier (§9.1 y §9.5)
+      const z = params.has("z") ? +params.get("z")
+        : Math.min(state.campo.maxzoom || 17, Perf.dial.zoomAtlas);
       const info = await Tiles.load(state.bbox, z, {
         onProgress: (n, tot) => carga(`Bajando imagen satelital… ${n}/${tot}`, 0.1 + 0.6 * n / tot)
       });
@@ -152,15 +160,18 @@ function onResize() {
     Perf.init(document.getElementById("hud"), DEBUG);
 
     DisplayFlat.init(renderer, scene, Rig, {
-      onUpdate: (dtMs, now) => {
+      // `msFrame` es el tiempo REAL del frame: el driver manda por separado
+      // el que usa la locomoción (topeado) y el que se mide (crudo)
+      onUpdate: (msFrame, now) => {
         Veg.tick(now / 1000);          // reloj del viento
         Sky.update(Rig);
-        Perf.frame(renderer, dtMs);
+        Chunks.update(Rig.rig.position, now);
+        Perf.frame(renderer, msFrame);
       },
       onAction: acc => {
         if (acc === "toggleScenario") setScenario(state.scenario === "inicial" ? "multi" : "inicial");
-        else if (acc === "home") Rig.home(extent);
-        else if (acc === "modo") Rig.alternarModo();
+        else if (acc === "home") { Rig.home(extent); Chunks.invalidar(); }
+        else if (acc === "modo") { Rig.alternarModo(); Chunks.invalidar(); }
       }
     });
     DisplayFlat.start();
@@ -168,13 +179,13 @@ function onResize() {
 
     if (DEBUG) {
       window.__vr = {
-        state, renderer, scene, Rig, Sky, Tiles, TilesFondo, Ground, Veg, Perf, DisplayFlat,
+        state, renderer, scene, Rig, Sky, Tiles, TilesFondo, Ground, Veg, Perf, Chunks, DisplayFlat,
         setScenario, applyOpacity, applyGrowth, extent,
         lonLatToScene, sceneToLonLat, projInfo,
         info: () => ({
           campo: state.campo.id, escenario: state.scenario,
           tiles: Tiles.info, suelo: Ground.info(), veg: Veg.info(),
-          perf: Perf.snapshot(renderer),
+          chunks: Chunks.info(), perf: Perf.snapshot(renderer),
           camara: {
             x: +Rig.rig.position.x.toFixed(1), z: +Rig.rig.position.z.toFixed(1),
             altura: +Rig.alturaOjo().toFixed(1), rumbo: +Rig.rumbo().toFixed(1)

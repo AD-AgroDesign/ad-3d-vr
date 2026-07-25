@@ -73,13 +73,18 @@ const DisplayFlat = {
     const loop = now => {
       if (!this.corriendo) return;
       this._rafId = requestAnimationFrame(loop);
-      // clamp: el primer timestamp de rAF puede ser anterior al now previo
-      // (quirk de Chrome, §11.4). Y tope de 100 ms para no teletransportar
-      // el rig tras una pausa larga de la pestaña.
-      const dtMs = Math.min(100, Math.max(0, now - this._prev));
+      // Dos dt distintos, a propósito:
+      // - `crudo` es el tiempo real del frame y es el que se MIDE. Clamparlo
+      //   antes de medirlo censura los frames lentos y hace que el p95 sature
+      //   en el valor del tope (bug real: el HUD marcaba 100,0 ms exactos).
+      // - `dtMs` va topeado a 100 ms sólo para la LOCOMOCIÓN, para que el rig
+      //   no se teletransporte tras una pausa larga de la pestaña.
+      // El Math.max(0, ...) es por el quirk de rAF de §11.4.
+      const crudo = Math.max(0, now - this._prev);
+      const dtMs = Math.min(100, crudo);
       this._prev = now;
       this.rig.update(this._leerIntent(), dtMs / 1000);
-      if (this.onUpdate) this.onUpdate(dtMs, now);
+      if (this.onUpdate) this.onUpdate(crudo, now, dtMs);
       this.render();
     };
     this._rafId = requestAnimationFrame(loop);
