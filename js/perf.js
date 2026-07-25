@@ -28,19 +28,19 @@
    del proyecto original, así que los conteos de regresión siguen dando. */
 const TIERS = {
   phone: {
-    radioMatas: 100, radioArboles: 400,
+    radioMatas: 100, radioArboles: 400, radioMax: 400,
     pasto: { "corr-herb": { densidad: 1500, tope: 40000 }, "parche-herb": { densidad: 600, tope: 25000 } },
-    zoomAtlas: 17, pixelRatio: 1.0, trisObjetivo: 250000, msPresupuesto: 16.7
+    zoomAtlas: 17, pixelRatio: 1.0, trisObjetivo: 250000, fpsObjetivo: 60
   },
   quest: {
-    radioMatas: 140, radioArboles: 600,
+    radioMatas: 140, radioArboles: 600, radioMax: 800,
     pasto: { "corr-herb": { densidad: 1500, tope: 90000 }, "parche-herb": { densidad: 800, tope: 60000 } },
-    zoomAtlas: 18, pixelRatio: null, trisObjetivo: 800000, msPresupuesto: 13.9
+    zoomAtlas: 18, pixelRatio: null, trisObjetivo: 800000, fpsObjetivo: 72
   },
   desktop: {
-    radioMatas: 250, radioArboles: 1200,
+    radioMatas: 250, radioArboles: 1200, radioMax: 3000,
     pasto: { "corr-herb": { densidad: 1500, tope: 180000 }, "parche-herb": { densidad: 800, tope: 120000 } },
-    zoomAtlas: 18, pixelRatio: null, trisObjetivo: 3000000, msPresupuesto: 16.7
+    zoomAtlas: 18, pixelRatio: null, trisObjetivo: 3000000, fpsObjetivo: 60
   }
 };
 
@@ -121,15 +121,31 @@ const Perf = {
     if (this.activo) this._pintar(renderer);
   },
 
-  /* Calidad adaptativa con histéresis (§8/P3.5):
-     - p95 por encima del presupuesto durante 2 s   → bajar un escalón
-     - p95 por debajo del 65 % durante 10 s         → subir uno
-     La banda del 65 % es el margen de §12.5: sin ella el sistema oscila
-     entre dos escalones en el borde. */
+  /* Factor del escalón de calidad adaptativa, para que Chunks lo aplique
+     DESPUÉS de abrir el radio por altura (ver Chunks.radioEfectivo) */
+  factorEscalon() { return ESCALONES[this.escalon]; },
+
+  /* Calidad adaptativa con histéresis (§8/P3.5). La decisión se toma con los
+     FPS contra el objetivo del tier (§9.5: phone 60, quest 72, desktop 60):
+     - fps < 70 % del objetivo durante 2 s   → bajar un escalón
+     - fps > 92 % del objetivo durante 10 s  → subir uno
+     La banda entre el 70 % y el 92 % es el margen de §12.5: sin ella el
+     sistema oscila entre dos escalones en el borde.
+
+     ⚠️ Por qué NO se usa un presupuesto en ms, que es lo primero que se
+     intenta: el ms/frame está cuantizado por el vsync. En un equipo a 60 Hz
+     un frame sano dura 16,7 ms y el p95 da ≈17, así que contra un presupuesto
+     de 16,7 ms la calidad adaptativa degrada hasta el piso con la máquina
+     corriendo perfecta, y encima no puede recuperarse nunca porque el umbral
+     de subida queda por debajo del vsync. Pasó en la primera medición en vivo.
+     Estimar el vsync tampoco sirvió: la mediana se contamina cuando la app va
+     lenta (marcaba 33 ms en una pantalla de 60 Hz) y el mínimo se envenena con
+     un frame corto suelto (marcaba 6,6 ms). Los fps ya vienen promediados por
+     ventana y no tienen ninguno de los dos problemas. */
   _adaptar(ventanaMs) {
-    const pres = this.dial.msPresupuesto;
-    if (this.p95 > pres) { this._sobre += ventanaMs; this._bajo = 0; }
-    else if (this.p95 < pres * 0.65) { this._bajo += ventanaMs; this._sobre = 0; }
+    const objetivo = this.dial.fpsObjetivo;
+    if (this.fps < objetivo * 0.70) { this._sobre += ventanaMs; this._bajo = 0; }
+    else if (this.fps > objetivo * 0.92) { this._bajo += ventanaMs; this._sobre = 0; }
     else { this._sobre = 0; this._bajo = 0; }
 
     const previo = this.escalon;
@@ -151,7 +167,8 @@ const Perf = {
       `<b>${this.fps.toFixed(0)}</b> fps · p95 ${this.p95.toFixed(1)} ms<br>` +
       `<span class="${exceso ? "warn" : ""}">${(r.triangles / 1000).toFixed(0)} k tris</span>` +
       ` · ${r.calls} draw calls<br>` +
-      `tier <b>${this.tier}</b> · escalón ${this.escalon} · R ${Math.round(this.radioMatas())} m` +
+      `tier <b>${this.tier}</b> · escalón ${this.escalon} · R ${Math.round(Chunks.radioEfectivoMatas())} m` +
+      ` · objetivo ${this.dial.fpsObjetivo} fps` +
       (this._ultimoCambio ? `<br><span class="warn">${this._ultimoCambio}</span>` : "") +
       (this.oculta ? '<br><span class="warn">hubo pestaña oculta: fps no confiable</span>' : "");
   },
@@ -161,7 +178,8 @@ const Perf = {
     return {
       tier: this.tier, escalon: this.escalon,
       radioMatas: this.radioMatas(), radioArboles: this.radioArboles(),
-      fps: +this.fps.toFixed(1), p95: +this.p95.toFixed(2),
+      radioEfectivo: +Chunks.radioEfectivoMatas().toFixed(0),
+      fps: +this.fps.toFixed(1), p95: +this.p95.toFixed(2), fpsObjetivo: this.dial.fpsObjetivo,
       triangulos: r.triangles, drawCalls: r.calls,
       trisObjetivo: this.dial.trisObjetivo,
       dentroDePresupuesto: r.triangles <= this.dial.trisObjetivo,

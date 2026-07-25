@@ -73,12 +73,40 @@ const Chunks = {
     this.celdas[key].push({ cx, cz, tipo, meshes, hi: hi || null, lo: lo || null, visible: true, cerca: true });
   },
 
+  /* El radio se ABRE con la altura.
+
+     El culling por radio parte de que en VR estás DENTRO de la escena
+     (§9.5), y ahí un radio fijo es correcto. Pero desde una vista aérea todo
+     queda fuera del radio y el campo se ve pelado, sin un solo árbol ni mata
+     — que es justo el activo visual del proyecto. Visto en la primera
+     medición en vivo: a 900 m de altura, cero celdas visibles.
+
+     La regla es `3 × altura`, así que a altura de dron (12–35 m) NO cambia
+     nada: 3×18 = 54 m es menos que el radio nominal de cualquier tier, y el
+     presupuesto medido a esa altura sigue valiendo tal cual. Sólo se abre
+     cuando se sube, y siempre con el tope `radioMax` del tier.
+
+     ⚠️ El factor del escalón se aplica AL FINAL, sobre el radio ya abierto.
+     Si se aplicara antes (que es lo que hace Perf.radioMatas()), el
+     `Math.max` con la altura lo anularía y la calidad adaptativa degradaría
+     hasta el piso SIN NINGÚN EFECTO. Bug visto en vivo: escalón 3 con el
+     radio efectivo intacto en 2695 m. */
+  radioEfectivo(base, altura) {
+    return Math.min(Perf.dial.radioMax, Math.max(base, altura * 3)) * Perf.factorEscalon();
+  },
+  radioEfectivoMatas() { return this._rPasto || Perf.radioMatas(); },
+
   /* Revisión de visibilidad. `key` es el escenario activo; el otro se apaga
      entero por opacidad, así que no hace falta recorrerlo. */
   update(camPos, ahora) {
     if (ahora - this._ultimaRevision < REVISAR_CADA) return;
     this._ultimaRevision = ahora;
-    const rPasto = Perf.radioMatas(), rArbol = Perf.radioArboles();
+    const alt = Math.max(0, camPos.y);
+    // los radios NOMINALES del tier: el factor del escalón lo aplica
+    // radioEfectivo() al final, después de abrir por altura
+    const rPasto = this.radioEfectivo(Perf.dial.radioMatas, alt);
+    const rArbol = this.radioEfectivo(Perf.dial.radioArboles, alt);
+    this._rPasto = rPasto;
 
     for (const key of ["inicial", "multi"]) {
       for (const c of this.celdas[key]) {
