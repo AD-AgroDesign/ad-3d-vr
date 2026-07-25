@@ -29,6 +29,25 @@ const FOV_CARDBOARD = 90;
    valor es literal. Dial razonable: 0,058–0,068. */
 const IPD = 0.064;
 
+/* Predicción de la pose de la cabeza.
+
+   Medido en el Android del dueño (2026-07-25): `deviceorientation` llega a
+   **19 Hz**, no a los ~60 Hz que asumía §9.8. A 60 fps eso significa que la
+   misma muestra se sostiene tres frames y después salta: se ve como
+   escalones al girar la cabeza y es justo el tipo de cosa que marea.
+
+   La corrección es la de cualquier runtime de VR: estimar la velocidad
+   angular con las dos últimas muestras y extrapolar hasta el instante del
+   frame (`slerp` con t > 1 extrapola bien mientras el ángulo sea chico).
+   NO es un filtro de suavizado: un lerp hacia la muestra vieja agregaría
+   latencia, que es lo que §9.8 prohíbe con razón. Esto RESTA latencia.
+
+   `PRED_TOPE_MS` acota el sobrepaso cuando el giro cambia de sentido, y
+   `TAU_MS` sólo lima la discontinuidad de cuando entra una muestra nueva
+   (amortiguado POR TIEMPO, §12.2). */
+const PRED_TOPE_MS = 40;
+const TAU_MS = 18;
+
 /* ============================================================
    Cabeza — head tracking por deviceorientation (§9.8)
 
@@ -39,6 +58,8 @@ const IPD = 0.064;
    ============================================================ */
 const Cabeza = {
   fuente: "ninguna",        // "sensores" | "mouse" | "ninguna"
+  modo: "predictiva",       // "predictiva" | "cruda"  (?cabeza=)
+  evento: "deviceorientation",   // o "deviceorientationabsolute" (?cabeza=absoluta)
   eventos: 0,
   hz: 0,
   absoluto: null,           // event.absolute: si es false, el yaw DERIVA
@@ -48,6 +69,11 @@ const Cabeza = {
   onSinSensores: null,      // se llama si no llega ningún evento en 1,5 s
 
   _q: new THREE.Quaternion(),
+  _qAct: new THREE.Quaternion(),    // última muestra
+  _qAnt: new THREE.Quaternion(),    // la anterior (para la velocidad angular)
+  _qSal: new THREE.Quaternion(),    // pose extrapolada
+  _qAplic: new THREE.Quaternion(),  // pose realmente aplicada (suavizada)
+  _tAct: 0, _tAnt: 0, _tAplic: 0,
   _qYawFix: new THREE.Quaternion(),
   _euler: new THREE.Euler(),
   _q0: new THREE.Quaternion(),
@@ -55,6 +81,7 @@ const Cabeza = {
   // al de la escena (pantalla mirando al frente)
   _q1: new THREE.Quaternion(-Math.SQRT1_2, 0, 0, Math.SQRT1_2),
   _zee: new THREE.Vector3(0, 0, 1),
+  _ejeY: new THREE.Vector3(0, 1, 0),
   _t0: 0, _timeout: 0,
   _onEvento: null,
 
@@ -63,6 +90,12 @@ const Cabeza = {
     this.activa = true;
     this.eventos = 0;
     this._t0 = performance.now();
+    // ?cabeza=cruda desactiva la predicción (para comparar a ojo en el visor);
+    // ?cabeza=absoluta usa el evento con magnetómetro, que no deriva pero
+    // puede empeorar cerca de los imanes del visor (§9.8).
+    const pedido = params.get("cabeza");
+    if (pedido === "cruda") this.modo = "cruda";
+    if (pedido === "absoluta") this.evento = "deviceorientationabsolute";
 
     this._onEvento = e => {
       // Con el sensor ausente Chrome puede entregar el evento con los tres
@@ -74,10 +107,17 @@ const Cabeza = {
       this.alpha = (e.alpha || 0) * D;
       this.beta = (e.beta || 0) * D;
       this.gamma = (e.gamma || 0) * D;
-      const ms = performance.now() - this._t0;
+      const ahora = performance.now();
+      const ms = ahora - this._t0;
       if (ms > 0) this.hz = this.eventos * 1000 / ms;
+      // se guardan las dos últimas muestras con su tiempo: de ahí sale la
+      // velocidad angular con la que se extrapola entre muestras
+      this._qAnt.copy(this._qAct); this._tAnt = this._tAct;
+      this._crudo(this._qAct); this._tAct = ahora;
       if (this.fuente !== "sensores") {
         this.fuente = "sensores";
+        this._qAnt.copy(this._qAct); this._tAnt = 0;
+        this._qAplic.copy(this._qAct);
         // primer evento: el yaw de arranque puede apuntar a cualquier lado
         this.recentrar();
       }
@@ -87,7 +127,7 @@ const Cabeza = {
     // y el evento empieza a llegar solo (§9.8, decisión D2: Android). Se
     // deja la forma escrita por compatibilidad futura, pero el flujo NO
     // está construido alrededor del permiso.
-    const suscribir = () => addEventListener("deviceorientation", this._onEvento, true);
+    const suscribir = () => addEventListener(this.evento, this._onEvento, true);
     if (typeof DeviceOrientationEvent !== "undefined" &&
         typeof DeviceOrientationEvent.requestPermission === "function") {
       DeviceOrientationEvent.requestPermission()
@@ -121,8 +161,9 @@ const Cabeza = {
     if (!this.activa) return;
     this.activa = false;
     clearTimeout(this._timeout);
-    if (this._onEvento) removeEventListener("deviceorientation", this._onEvento, true);
+    if (this._onEvento) removeEventListener(this.evento, this._onEvento, true);
     this.fuente = "ninguna";
+    this._tAct = this._tAnt = this._tAplic = 0;
   },
 
   /* Ángulo de rotación de la pantalla, en radianes */
@@ -149,15 +190,37 @@ const Cabeza = {
   recentrar() {
     this._crudo(this._q);
     this._euler.setFromQuaternion(this._q, "YXZ");
-    this._qYawFix.setFromAxisAngle(new THREE.Vector3(0, 1, 0), -this._euler.y);
+    this._qYawFix.setFromAxisAngle(this._ejeY, -this._euler.y);
   },
 
   /* Escribe la orientación en la CÁMARA (hija del rig), nunca en el rig:
-     el rig es de la locomoción. */
+     el rig es de la locomoción.
+
+     Entre muestras se extrapola (ver el comentario de PRED_TOPE_MS): el
+     sensor de este teléfono va a 19 Hz y el render a 60, así que sin esto
+     dos de cada tres frames muestran una pose vieja. */
   aplicar(camera) {
-    this._crudo(this._q);
-    this._q.premultiply(this._qYawFix);      // corrección de yaw en MUNDO
-    camera.quaternion.copy(this._q);
+    const ahora = performance.now();
+    const dtEvt = this._tAnt ? this._tAct - this._tAnt : 0;
+
+    if (this.modo === "predictiva" && dtEvt > 4 && dtEvt < 200) {
+      const adelanto = Math.min(ahora - this._tAct, PRED_TOPE_MS);
+      // slerp con t > 1 extrapola: prolonga el giro de las dos últimas
+      // muestras. El tope de t evita que un giro rápido se dispare.
+      const t = Math.min(1 + adelanto / dtEvt, 2.5);
+      this._qSal.copy(this._qAnt).slerp(this._qAct, t);
+    } else {
+      this._qSal.copy(this._qAct);
+    }
+
+    // Suavizado mínimo, sólo para que la llegada de cada muestra no sea un
+    // escalón. Por TIEMPO, no por frame (§12.2): con 60 fps en cardboard y
+    // 72–90 en XR el mismo código tiene que comportarse igual.
+    const dtFrame = this._tAplic ? ahora - this._tAplic : TAU_MS;
+    this._tAplic = ahora;
+    this._qAplic.slerp(this._qSal, 1 - Math.exp(-dtFrame / TAU_MS));
+
+    camera.quaternion.copy(this._qAplic).premultiply(this._qYawFix);
   }
 };
 
@@ -398,6 +461,8 @@ const DisplayCardboard = {
     return {
       fov: FOV_CARDBOARD, ipd: IPD,
       cabeza: Cabeza.fuente,
+      modoCabeza: Cabeza.modo,
+      eventoCabeza: Cabeza.evento,
       eventos: Cabeza.eventos,
       hz: +Cabeza.hz.toFixed(1),
       absoluto: Cabeza.absoluto,

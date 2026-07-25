@@ -56,6 +56,24 @@
     button:active { background: #3d6b47; }
     #copiado { position: fixed; bottom: 68px; left: 50%; transform: translateX(-50%); display: none;
       background: #1e3626; border: 1px solid #3d6b47; border-radius: 8px; padding: 6px 12px; font-size: 13px; }
+    /* Asistente de mapeo: pantalla completa y letra grande, porque se usa con
+       el mando en la mano y sin mirar de cerca. */
+    /* El overlay es su propio contenedor de scroll, y el centrado se hace con
+       `margin: auto` en el primer y el último hijo — NO con justify-content:
+       center. Con justify-content, cuando el contenido no entra (pantalla
+       apaisada de 390 px + la lista final del mapeo) los extremos quedan
+       INALCANZABLES: los botones Saltar/Cerrar se iban abajo del viewport y no
+       había forma de cerrar el asistente. Verificado midiendo el rect. */
+    #asistente { display: none; position: fixed; inset: 0; z-index: 40; background: rgba(10,20,13,.97);
+      flex-direction: column; align-items: center; gap: 10px; padding: 14px; text-align: center;
+      overflow-y: auto; }
+    #asistente.abierto { display: flex; }
+    #asis-paso { color: var(--muted); font-size: 14px; font-family: ui-monospace, monospace; margin-top: auto; }
+    #asis-pide { font-size: clamp(20px, 6vw, 38px); font-weight: 700; color: var(--gold); line-height: 1.15;
+      white-space: pre-line; }
+    #asis-hint { color: var(--muted); font-size: 13px; max-width: 44ch; }
+    #asis-btns { display: flex; gap: 8px; margin-bottom: auto; padding-top: 4px; }
+    #asis-btns button { flex: 0 0 auto; padding: 12px 22px; }
     /* El textarea es el plan B para copiar cuando falla la Clipboard API
        (pasa fuera de HTTPS): tiene que ser seleccionable a mano. */
     textarea { width: 100%; height: 130px; display: none; margin-top: 8px; font: 11px ui-monospace, monospace;
@@ -68,6 +86,19 @@
     stick y cada gatillo hasta el tope. Al final tocá <b>Copiar log</b> y mandame el texto.</p>
 
   <div id="estado">Pulsá cualquier botón del mando…</div>
+
+  <!-- Mapeo guiado: pide una acción a la vez y anota qué entrada la disparó.
+       Es lo que evita adivinar el mapeo (§9.10) cuando el mando tiene 17
+       botones sin etiquetas y varios son basura del descriptor HID. -->
+  <div id="asistente">
+    <div id="asis-paso">—</div>
+    <div id="asis-pide">—</div>
+    <div id="asis-hint">Apretá el botón que quieras usar para esa acción. Un botón por acción.</div>
+    <div id="asis-btns">
+      <button id="asis-saltar" type="button">Saltar</button>
+      <button id="asis-cerrar" type="button">Cerrar</button>
+    </div>
+  </div>
 
   <div class="cols">
     <section style="flex:1 1 340px">
@@ -89,6 +120,7 @@
   <div id="copiado">copiado</div>
   <div id="barra-inf">
     <button id="btn-limpiar" type="button">Limpiar</button>
+    <button id="btn-mapeo" type="button">Mapeo guiado</button>
     <button id="btn-copiar" type="button">Copiar log</button>
   </div>
 
@@ -162,7 +194,11 @@
     const d = `code=${e.code || "?"} key=${JSON.stringify(e.key)} keyCode=${e.keyCode}` +
       (e.repeat ? " (repeat)" : "");
     log("teclado", `${tipo} ${d}`, tipo === "keydown" ? "ok" : "");
-    if (tipo === "keydown" && !e.repeat) anotar("tecla " + (e.code || e.key), d);
+    if (tipo === "keydown" && !e.repeat) {
+      const clave = "tecla " + (e.code || e.key);
+      anotar(clave, d);
+      Asis.candidato(clave);
+    }
     // Se frena el scroll y el zoom de las teclas de navegación, pero NO se
     // toca Escape (tiene que poder salir de pantalla completa) ni las teclas
     // de volumen/multimedia, que el navegador no siempre deja interceptar.
@@ -187,6 +223,9 @@
     addEventListener(tipo, e => {
       log("mouse", `${tipo} button=${e.button} buttons=${e.buttons} x=${e.clientX} y=${e.clientY}`, "ok");
       anotar(`mouse ${tipo} b${e.button}`, `botón ${e.button} del mouse`);
+      // sólo mousedown es una PULSACIÓN nueva: click/mouseup son ecos de la
+      // misma, y contarlos tres veces confundiría al asistente
+      if (tipo === "mousedown") Asis.candidato(`mouse b${e.button}`);
       if (tipo === "contextmenu") e.preventDefault();
     });
   }
@@ -221,6 +260,7 @@
      es cuánto ruido tiene el mando en reposo. */
   const DEADZONE_REF = 0.18;
   const previo = {};          // index → { botones: [], ejes: [] }
+  const PEGADOS = new Set();  // botones ya pulsados al conectar ⇒ ruido seguro
   let huboGamepad = false;
 
   addEventListener("gamepadconnected", e => {
@@ -286,12 +326,28 @@
       if (!p) p = previo[g.index] = { botones: [], ejes: [], vistos: new Set() };
       g.buttons.forEach((b, i) => {
         const antes = p.botones[i];
-        if (antes === undefined) { p.botones[i] = b.value; return; }
+        if (antes === undefined) {
+          p.botones[i] = b.value;
+          // Un botón que YA está pulsado cuando aparece el mando está pegado
+          // o es basura del descriptor HID (el ONSET del dueño llega con el 3
+          // así). Se marca desde el arranque, sin esperar capturas.
+          if (b.pressed) {
+            PEGADOS.add(`gp${g.index} b${i}`);
+            log("gamepad", `gp${g.index} botón ${i} YA VENÍA PULSADO al conectar ` +
+              `→ se trata como ruido, no como botón físico`, "warn");
+            anotar(`gp${g.index} botón ${i}`, "PEGADO al conectar (ruido)", b.value);
+          }
+          return;
+        }
         // los botones analógicos (gatillos) informan `value`, no sólo `pressed`
         if (b.pressed !== antes >= 0.5 || Math.abs(b.value - antes) > 0.15) {
           log("gamepad", `gp${g.index} botón ${i} ${b.pressed ? "ABAJO" : "arriba"} value=${b.value.toFixed(2)}`,
             b.pressed ? "ok" : "");
-          if (b.pressed) { anotar(`gp${g.index} botón ${i}`, "botón del mando", b.value); p.vistos.add("b" + i); }
+          if (b.pressed) {
+            anotar(`gp${g.index} botón ${i}`, "botón del mando", b.value);
+            p.vistos.add("b" + i);
+            Asis.candidato(`gp${g.index} b${i}`);
+          }
         }
         p.botones[i] = b.value;
       });
@@ -301,6 +357,9 @@
         if (Math.abs(v - antes) > 0.09) {
           log("gamepad", `gp${g.index} eje ${i} = ${v.toFixed(3)}`);
           anotar(`gp${g.index} eje ${i}`, "eje del mando", v);
+          // para el asistente, un eje vale como pulsación recién pasado el
+          // medio recorrido, y con signo: un stick da dos acciones distintas
+          if (Math.abs(v) > 0.5) Asis.candidato(`gp${g.index} eje ${i}${v > 0 ? "+" : "-"}`);
           p.ejes[i] = v;
         }
       });
@@ -308,6 +367,149 @@
     pintarPads(gps);
   }
   requestAnimationFrame(poll);
+
+  /* ============================================================
+     Asistente de mapeo guiado
+
+     Por qué existe: el mando del dueño tiene 17 botones sin etiqueta, sin
+     mapping estándar, y **varios botones no son físicos** — en el primer log
+     real el botón 3 vino pulsado desde el instante de conectar y el 3 y el 4
+     se alternaban en contrafase con cada pulsación real (basura del
+     descriptor HID). Con un log crudo hay que adivinar; con esto, no.
+
+     Cómo filtra el ruido, sin hardcodear nada del mando: en cada captura
+     anota TODOS los botones que bajan en una ventana corta, y al final
+     descarta los que aparecen en la mayoría de las capturas — un botón que
+     se activa con todo no distingue nada, por definición.
+     ============================================================ */
+  const ACCIONES_MAPEO = [
+    ["avanzar",        "AVANZAR"],
+    ["retroceder",     "RETROCEDER"],
+    ["girarIzq",       "GIRAR A LA IZQUIERDA"],
+    ["girarDer",       "GIRAR A LA DERECHA"],
+    ["subir",          "SUBIR"],
+    ["bajar",          "BAJAR"],
+    ["toggleScenario", "CONMUTAR PAISAJE\n(Actual ↔ Multifuncional)"],
+    ["recenter",       "RECENTRAR LA VISTA"],
+    ["tour",           "TOUR: arrancar / parar"],
+    ["modo",           "MODO DRON / SUELO"],
+    ["menu",           "MENÚ"]
+  ];
+  const GRACIA_MS = 700;      // ignora la pulsación con la que se llegó al paso
+  const VENTANA_MS = 200;     // junta los botones simultáneos (el ruido HID llega en el mismo poll)
+
+  const Asis = {
+    abierto: false, paso: 0, capturas: {},
+    _desde: 0, _cands: null, _primero: 0,
+
+    abrir() {
+      this.abierto = true; this.paso = 0; this.capturas = {};
+      document.getElementById("asistente").classList.add("abierto");
+      log("sistema", "mapeo guiado: inicio");
+      this._pedir();
+    },
+
+    cerrar() {
+      this.abierto = false; this._cands = null;
+      document.getElementById("asistente").classList.remove("abierto");
+    },
+
+    _pedir() {
+      if (this.paso >= ACCIONES_MAPEO.length) return this._terminar();
+      const [, etiqueta] = ACCIONES_MAPEO[this.paso];
+      document.getElementById("asis-paso").textContent =
+        `paso ${this.paso + 1} de ${ACCIONES_MAPEO.length}`;
+      document.getElementById("asis-pide").textContent = etiqueta;
+      document.getElementById("asis-hint").textContent =
+        "Apretá el botón (o movés el stick) que quieras usar para esta acción.";
+      document.getElementById("asis-saltar").hidden = false;
+      this._cands = new Set();
+      this._primero = 0;
+      this._desde = performance.now() + GRACIA_MS;
+    },
+
+    /* La llaman todas las fuentes de entrada cuando hay una PULSACIÓN nueva */
+    candidato(clave) {
+      if (!this.abierto || !this._cands) return;
+      const ahora = performance.now();
+      if (ahora < this._desde) return;                 // gracia
+      if (!this._primero) {
+        this._primero = ahora;
+        setTimeout(() => this._confirmar(), VENTANA_MS);
+      }
+      this._cands.add(clave);
+    },
+
+    _confirmar() {
+      if (!this.abierto || !this._cands || !this._cands.size) return;
+      const [accion] = ACCIONES_MAPEO[this.paso];
+      this.capturas[accion] = [...this._cands];
+      log("mapeo", `${accion} ← ${this.capturas[accion].join(" + ")}`, "ok");
+      this.paso++;
+      this._pedir();
+    },
+
+    saltar() {
+      if (!this.abierto) return;
+      if (this.paso < ACCIONES_MAPEO.length) {
+        this.capturas[ACCIONES_MAPEO[this.paso][0]] = null;
+        log("mapeo", `${ACCIONES_MAPEO[this.paso][0]} ← (saltado)`);
+      }
+      this.paso++;
+      this._pedir();
+    },
+
+    /* Dos filtros de ruido, independientes:
+       1. Los botones que YA venían pulsados al conectar el mando (PEGADOS).
+          No necesita ninguna captura y es el que agarra el botón 3 del ONSET.
+       2. Los que aparecen en la mayoría de las capturas: un botón que se
+          enciende con todo no distingue ninguna acción, por definición. Este
+          agarra al 4, que se alterna en contrafase con cada pulsación real.
+       Hace falta al menos 2 capturas para el segundo; con menos no hay
+       diferencia entre "aparece siempre" y "sólo lo probé una vez". */
+    ruido() {
+      const fuera = new Set(PEGADOS);
+      const cuenta = new Map(), total = Object.values(this.capturas).filter(Boolean).length;
+      for (const cands of Object.values(this.capturas)) {
+        if (!cands) continue;
+        for (const c of cands) cuenta.set(c, (cuenta.get(c) || 0) + 1);
+      }
+      if (total >= 2) for (const [c, n] of cuenta) if (n / total >= 0.6) fuera.add(c);
+      return fuera;
+    },
+
+    resultado() {
+      const fuera = this.ruido(), out = {};
+      for (const [accion] of ACCIONES_MAPEO) {
+        const cands = this.capturas[accion];
+        if (!cands) { out[accion] = null; continue; }
+        const limpio = cands.filter(c => !fuera.has(c));
+        // si el filtro se comió todo, se devuelve lo crudo: mejor un dato
+        // dudoso y visible que un null que esconde el problema
+        out[accion] = (limpio.length ? limpio : cands);
+      }
+      return { mapeo: out, descartadoPorRuido: [...fuera] };
+    },
+
+    _terminar() {
+      const r = this.resultado();
+      document.getElementById("asis-paso").textContent = "listo";
+      document.getElementById("asis-pide").textContent = "Mapeo capturado";
+      document.getElementById("asis-saltar").hidden = true;   // ya no hay nada que saltar
+      document.getElementById("asis-hint").innerHTML =
+        `<div style="font:12px/1.6 ui-monospace,monospace;text-align:left">` +
+        Object.entries(r.mapeo).map(([k, v]) =>
+          `${k}: <b>${v ? v.join(" + ") : "—"}</b>`).join("<br>") +
+        (r.descartadoPorRuido.length
+          ? `<br><br><span class="warn">descartado por ruido: ${r.descartadoPorRuido.join(", ")}</span>` : "") +
+        `<br><br>Ahora tocá <b>Cerrar</b> y después <b>Copiar log</b>.</div>`;
+      log("mapeo", "resultado: " + JSON.stringify(r));
+    }
+  };
+
+  document.getElementById("btn-mapeo").addEventListener("click", () => Asis.abrir());
+  document.getElementById("asis-saltar").addEventListener("click", () => Asis.saltar());
+  document.getElementById("asis-cerrar").addEventListener("click", () => Asis.cerrar());
 
   /* ---------- Copiar / limpiar ---------- */
   function texto() {
@@ -320,9 +522,14 @@
         ? Array.from(navigator.getGamepads()).filter(Boolean)
             .map(g => `[${g.index}] "${g.id}" ${g.buttons.length}b/${g.axes.length}e mapping="${g.mapping}"`).join(" | ") || "ninguno"
         : "sin API"),
-      "",
-      "=== ENTRADAS DISTINTAS VISTAS (esto es lo que define el mapeo) ==="
+      ""
     ];
+    // El resultado del asistente va PRIMERO: es lo más accionable del volcado
+    if (Object.keys(Asis.capturas).length) {
+      const r = Asis.resultado();
+      cab.push("=== MAPEO GUIADO ===", JSON.stringify(r, null, 1), "");
+    }
+    cab.push("=== ENTRADAS DISTINTAS VISTAS (esto es lo que define el mapeo) ===");
     for (const [k, v] of vistas) {
       cab.push(`${k} ×${v.n} — ${v.detalle}` + (isFinite(v.min) ? ` · rango ${v.min.toFixed(2)} → ${v.max.toFixed(2)}` : ""));
     }
@@ -347,6 +554,7 @@
 
   document.getElementById("btn-limpiar").addEventListener("click", () => {
     lineas.length = 0; vistas.clear(); logEl.innerHTML = "";
+    Asis.capturas = {}; Asis.paso = 0;
     document.getElementById("volcado").style.display = "none";
     pintarResumen();
     log("sistema", "registro limpiado");

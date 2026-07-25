@@ -61,6 +61,7 @@
   <div id="copiado">copiado</div>
   <div id="barra">
     <button id="btn-inmersion" type="button">Probar pantalla completa</button>
+    <button id="btn-xr" type="button">Probar WebXR</button>
     <button id="btn-copiar" type="button">Copiar todo</button>
   </div>
 
@@ -293,6 +294,56 @@
     poner("pantalla", "prueba de inmersión", res.join(" · "),
       res.every(r => r.includes("OK")) ? "ok" : "warn");
     pantalla();
+  });
+
+  /* ---------- Sonda de WebXR ----------
+     `isSessionSupported("immersive-vr")` dio **true** en el Android del dueño
+     (2026-07-25), contra lo que asumía §5.1. Pero "soportado" no es "abre y
+     sirve": lo único que lo prueba es pedir la sesión de verdad, desde un
+     gesto, y ver qué entrega. Si abre, el camino de P7 (WebXR) también sirve
+     en el TELÉFONO, y con él vienen gratis la distorsión de barril y la
+     reproyección, que hoy no tenemos.
+     La sesión se cierra sola: esta página sólo la sondea. */
+  document.getElementById("btn-xr").addEventListener("click", async () => {
+    if (!navigator.xr) { poner("xr", "prueba de sesión", "no hay navigator.xr", "bad"); return; }
+    poner("xr", "prueba de sesión", "pidiendo…", "warn");
+    let s = null;
+    try {
+      s = await navigator.xr.requestSession("immersive-vr", {
+        optionalFeatures: ["local-floor", "bounded-floor", "viewer"]
+      });
+    } catch (e) {
+      poner("xr", "prueba de sesión", `FALLÓ: ${e.name} — ${e.message}`, "bad");
+      return;
+    }
+    poner("xr", "prueba de sesión", "la sesión ABRIÓ", "ok");
+    // modo de entorno y frecuencias: definen si conviene el camino XR
+    poner("xr", "environmentBlendMode", s.environmentBlendMode || "—");
+    poner("xr", "interactionMode", s.interactionMode || "—");
+    poner("xr", "frameRate", s.frameRate || "no reporta");
+    poner("xr", "supportedFrameRates", s.supportedFrameRates ? Array.from(s.supportedFrameRates).join(", ") : "no reporta");
+    for (const tipo of ["local-floor", "local", "viewer"]) {
+      try { await s.requestReferenceSpace(tipo); poner("xr", "refSpace " + tipo, "OK", "ok"); }
+      catch (e) { poner("xr", "refSpace " + tipo, "no: " + e.name, "warn"); }
+    }
+    // tamaño real del framebuffer por ojo: es el presupuesto de fill rate
+    try {
+      const c = document.createElement("canvas");
+      const g = c.getContext("webgl2", { xrCompatible: true });
+      await g.makeXRCompatible();
+      const capa = new XRWebGLLayer(s, g);
+      await s.updateRenderState({ baseLayer: capa });
+      poner("xr", "framebuffer XR", `${capa.framebufferWidth} × ${capa.framebufferHeight}`, "ok");
+      // que llegue un frame es la prueba de que el runtime está vivo, no sólo
+      // de que la sesión se creó
+      await new Promise(res => s.requestAnimationFrame(t => {
+        poner("xr", "primer frame XR", "llegó · t=" + Math.round(t), "ok");
+        res();
+      }));
+    } catch (e) {
+      poner("xr", "framebuffer XR", "no se pudo: " + e.message, "warn");
+    }
+    try { await s.end(); poner("xr", "sesión cerrada", "OK"); } catch (e) {}
   });
 
   /* ---------- Copiar todo ---------- */

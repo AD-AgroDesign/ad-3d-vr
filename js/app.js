@@ -12,6 +12,7 @@
      ?alt=<m>      altura inicial del ojo  ?sinsat  arranca sin satélite
      ?modo=flat|cardboard                  ?tier=phone|quest|desktop
      ?pose=aerea|dron|corredor             ?escenario=inicial|multi
+     ?pr=<n>       pixelRatio (nitidez)    ?cabeza=predictiva|cruda|absoluta
 
    El reporte de verificación del núcleo de datos vive en verify.html, y el
    diagnóstico del dispositivo en diag.html.
@@ -203,7 +204,14 @@ function actualizarBotones() {
     // matas, porque cada instancia cuesta memoria y tiempo de construcción
     // aunque el culling por radio después no la dibuje (§9.5).
     Perf.aplicarTier();
-    if (Perf.dial.pixelRatio) renderer.setPixelRatio(Perf.dial.pixelRatio);
+    // El tier `phone` fuerza pixelRatio 1,0, y en el teléfono del dueño el
+    // devicePixelRatio real es 2,16: con estéreo eso deja 557×501 por ojo en
+    // una pantalla de 2400 px de ancho, o sea imagen blanda. Como la medición
+    // real dio 60 fps con margen, `?pr=` permite probar 1,25 / 1,5 y decidir
+    // con el número en la mano en vez de suponer.
+    const pr = params.has("pr") ? Math.min(+params.get("pr"), devicePixelRatio)
+      : Perf.dial.pixelRatio;
+    if (pr) renderer.setPixelRatio(pr);
     await loadData();
     const extent = sceneExtent();
 
@@ -262,7 +270,8 @@ function actualizarBotones() {
         Chunks.update(Rig.rig.position, now);
         if (Perf.activo && driver === DisplayCardboard) {
           const c = Cabeza.fuente === "sensores"
-            ? `cabeza sensores ${Cabeza.hz.toFixed(0)} Hz${Cabeza.absoluto === false ? " (deriva)" : ""}`
+            ? `cabeza ${Cabeza.hz.toFixed(0)} Hz · ${Cabeza.modo}` +
+              (Cabeza.absoluto === false ? " · deriva" : "")
             : `<span class="warn">cabeza ${Cabeza.fuente}</span>`;
           Perf.linea = `estéreo · ${c}`;
         }
