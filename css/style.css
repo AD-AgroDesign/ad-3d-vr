@@ -1,0 +1,76 @@
+/* ============================================================
+   style.css — Mínimo: en VR casi no hay DOM (§7). Esto es el chrome de
+   escritorio: canvas a pantalla completa, overlay de carga, HUD y la
+   atribución obligatoria de Esri.
+   Las reglas de touch/overscroll ya están puestas pensando en el teléfono
+   dentro del visor (§9.9).
+   ============================================================ */
+:root {
+  --ink: #e8efe0;
+  --panel: rgba(10, 20, 13, .72);
+  --muted: #a8c0ab;
+  --gold: #e8d9a0;
+  --bad: #e57373;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0; padding: 0; height: 100%; overflow: hidden;
+  background: #0d1a10; color: var(--ink);
+  font: 14px/1.5 -apple-system, Segoe UI, Roboto, system-ui, sans-serif;
+  touch-action: none; user-select: none; overscroll-behavior: none;
+}
+
+#vista { display: block; width: 100%; height: 100%; outline: none; }
+
+/* --- Overlay de carga --- */
+#carga {
+  position: fixed; inset: 0; z-index: 30; display: flex;
+  flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+  background: #0d1a10;
+}
+#carga .marca { font-size: 20px; font-weight: 600; letter-spacing: .01em; }
+#carga .marca span { color: var(--gold); }
+#carga .txt { color: var(--muted); font-variant-numeric: tabular-nums; }
+#carga .barra { width: min(320px, 60vw); height: 4px; background: #1b3122; border-radius: 3px; overflow: hidden; }
+#carga .barra i { display: block; height: 100%; width: 0; background: #6a9c4a; transition: width .2s ease; }
+
+/* --- Chrome de escritorio --- */
+#escenario {
+  position: fixed; top: 12px; left: 12px; z-index: 10;
+  background: var(--panel); padding: 7px 13px; border-radius: 8px;
+  backdrop-filter: blur(4px);
+}
+#ayuda {
+  position: fixed; bottom: 34px; left: 12px; z-index: 10;
+  background: var(--panel); padding: 7px 13px; border-radius: 8px;
+  color: var(--muted); font-size: 12px; line-height: 1.7; max-width: 46ch;
+  backdrop-filter: blur(4px);
+}
+#ayuda kbd {
+  background: #1e3626; border-radius: 4px; padding: 1px 5px; color: var(--ink);
+  font: 11px ui-monospace, monospace;
+}
+#hud {
+  position: fixed; top: 12px; right: 12px; z-index: 10; display: none;
+  background: var(--panel); padding: 7px 12px; border-radius: 8px;
+  font: 12px/1.5 ui-monospace, monospace; text-align: right;
+}
+#hud .warn { color: var(--gold); }
+
+/* Atribución obligatoria de la imagen satelital (§9.1) */
+#credito {
+  position: fixed; bottom: 6px; right: 8px; z-index: 10;
+  font-size: 11px; color: var(--muted); background: rgba(10, 20, 13, .5);
+  padding: 2px 8px; border-radius: 6px;
+}
+#credito a { color: var(--muted); }
+
+#error {
+  position: fixed; inset: auto 12px 12px 12px; z-index: 40; display: none;
+  background: #1a0d0d; color: var(--bad); padding: 12px; border-radius: 8px;
+  font: 12px/1.5 ui-monospace, monospace; white-space: pre-wrap; max-height: 40vh; overflow: auto;
+}
+
+@media (max-width: 760px) { #ayuda { display: none; } }
