@@ -77,9 +77,24 @@ body.estereo #hud,
 body.estereo #hud2 {
   top: 22%; right: auto; text-align: center;
   transform: translateX(-50%);
+  /* `width: max-content` es imprescindible: con `left: 75%` y ancho auto, el
+     ancho disponible es el 25 % que queda hasta el borde, así que el panel del
+     ojo derecho se encogía y cortaba los renglones en distinto lugar que el
+     izquierdo (visible en la captura del dueño del 2026-07-25). Los dos
+     paneles tienen que ser idénticos o el estéreo del HUD no fusiona. */
+  width: max-content; max-width: 46vw;
+  /* Idénticos también en tipografía y padding: los dos paneles tienen que ser
+     el MISMO objeto visual para que el texto fusione (con 12px/7px en uno y
+     11px/6px en el otro quedaban 4 px de diferencia de ancho). */
+  padding: 6px 10px;
+  font: 11px/1.45 ui-monospace, monospace;
 }
-body.estereo #hud { left: 25%; font-size: 11px; }
-body.estereo #hud2 { left: 75%; }
+/* Los dos paneles van a los CENTROS DE LENTE, no al 25/75 % del ancho: si la
+   separación está calibrada (--sep, la escribe display-cardboard.js) el texto
+   tiene que quedar donde queda la imagen, o el HUD no fusiona aunque la escena
+   sí. Sin calibración, --sep = 50vw y esto da 25 % / 75 % como antes. */
+body.estereo #hud { left: calc(50% - var(--sep, 50vw) / 2); }
+body.estereo #hud2 { left: calc(50% + var(--sep, 50vw) / 2); }
 
 /* --- Botones del modo VR --- */
 #vr-botones {

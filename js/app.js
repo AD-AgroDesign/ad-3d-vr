@@ -13,6 +13,7 @@
      ?modo=flat|cardboard                  ?tier=phone|quest|desktop
      ?pose=aerea|dron|corredor             ?escenario=inicial|multi
      ?pr=<n>       pixelRatio (nitidez)    ?cabeza=predictiva|cruda|absoluta
+     ?sep=<px>|auto  separación de los centros de imagen (fusión en el visor)
 
    El reporte de verificación del núcleo de datos vive en verify.html, y el
    diagnóstico del dispositivo en diag.html.
@@ -109,6 +110,19 @@ function aviso(html) {
   el.innerHTML = html;
 }
 
+/* Mensaje de la calibración de separación. Dice el valor en px y su
+   equivalente aproximado en mm, con la salvedad honesta de que el navegador
+   NO expone el DPI físico: la conversión asume el nominal de Android
+   (1 px CSS ≈ 1/160 de pulgada) y puede errar ~15 %. Sirve para saber si se
+   está cerca de una IPD humana (58–68 mm), no como medida de precisión. */
+function textoSeparacion(px) {
+  const mm = px * 25.4 / 160;
+  return `Separación de imágenes: <b>${px} px</b> (~${mm.toFixed(0)} mm) · ` +
+    `IPD humana típica 58–68 mm.<br>` +
+    `Ajustá hasta que las dos vistas se fusionen en una. Queda recordada; ` +
+    `también se puede fijar con <b>?sep=${px}</b>.`;
+}
+
 /* ---------- Poses iniciales ----------
 
    `aerea` es la vista del proyecto original (sobrevuelo del campo entero) y
@@ -168,6 +182,10 @@ function actualizarBotones() {
   const btnVR = document.getElementById("btn-vr");
   const btnRec = document.getElementById("btn-recentrar");
   const btnSalir = document.getElementById("btn-salir");
+  for (const id of ["btn-sep-menos", "btn-sep-mas"]) {
+    const b = document.getElementById(id);
+    if (b) b.hidden = !enVR;
+  }
   if (!btnVR) return;
   // en cardboard el botón principal pasa a ser el de pantalla completa, y
   // desaparece cuando ya se está en pantalla completa
@@ -273,7 +291,7 @@ function actualizarBotones() {
             ? `cabeza ${Cabeza.hz.toFixed(0)} Hz · ${Cabeza.modo}` +
               (Cabeza.absoluto === false ? " · deriva" : "")
             : `<span class="warn">cabeza ${Cabeza.fuente}</span>`;
-          Perf.linea = `estéreo · ${c}`;
+          Perf.linea = `estéreo sep ${Math.round(DisplayCardboard.separacion())} px · ${c}`;
         }
         Perf.frame(renderer, msFrame);
       },
@@ -296,6 +314,13 @@ function actualizarBotones() {
     });
     document.getElementById("btn-recentrar").addEventListener("click", () => DisplayCardboard.recentrar());
     document.getElementById("btn-salir").addEventListener("click", salirVR);
+    // Calibración de la separación de imágenes. Se ajusta mirando la pantalla
+    // a la distancia de las lentes, ANTES de meter el teléfono en el visor:
+    // el valor correcto es el que hace que las dos vistas se fusionen en una.
+    document.getElementById("btn-sep-menos").addEventListener("click",
+      () => aviso(textoSeparacion(DisplayCardboard.ajustarSeparacion(-8))));
+    document.getElementById("btn-sep-mas").addEventListener("click",
+      () => aviso(textoSeparacion(DisplayCardboard.ajustarSeparacion(+8))));
     // Si el usuario sale de pantalla completa con el gesto del sistema, salir
     // del estéreo en vez de quedar con la imagen doble cortada por las barras
     // del navegador (§9.9).

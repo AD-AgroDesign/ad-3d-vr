@@ -29,6 +29,29 @@ const FOV_CARDBOARD = 90;
    valor es literal. Dial razonable: 0,058–0,068. */
 const IPD = 0.064;
 
+/* SEPARACIÓN DE LOS CENTROS DE IMAGEN EN PANTALLA — no confundir con IPD.
+
+   Reporte del dueño (2026-07-25) con el visor puesto: «son dos imágenes
+   paralelas pero no se solapan». La causa es geométrica y no tiene nada que
+   ver con el paralaje: partir el canvas en dos mitades pone los centros de
+   imagen al 25 % y al 75 % del ancho, o sea separados **medio ancho de
+   pantalla**. En su teléfono (2402 px físicos, ~150 mm de ancho) eso da
+   ~75 mm entre centros, contra una distancia interpupilar humana de ~63 mm:
+   los ojos tienen que DIVERGIR 12 mm para fusionar, y muchas personas
+   simplemente no pueden. Las lentes del visor están fijas a su propia
+   separación, no al 25/75 % de un teléfono cualquiera.
+
+   Es exactamente el parámetro que los perfiles de Cardboard llaman
+   "inter-lens distance", y por eso el SDK de Google traía perfiles por visor.
+   Acá se resuelve corriendo cada ojo HACIA ADENTRO: el `scissor` sigue siendo
+   la mitad de pantalla (recorta), pero el `viewport` va desplazado (mapea).
+   Así no hay que tocar la matriz de proyección — que la cachea StereoCamera y
+   mutarla cada frame la acumularía.
+
+   `null` = mitad exacta del canvas, que es el comportamiento anterior. */
+const SEP_MIN = 40, SEP_PASO = 8;      // px CSS
+const SEP_CLAVE = "ad3dvr.sepPx";      // se recuerda por dispositivo
+
 /* Predicción de la pose de la cabeza.
 
    Medido en el Android del dueño (2026-07-25): `deviceorientation` llega a
@@ -84,6 +107,8 @@ const Cabeza = {
   _ejeY: new THREE.Vector3(0, 1, 0),
   _t0: 0, _timeout: 0,
   _onEvento: null,
+  _sellos: [],              // timestamps recientes, para medir los Hz de verdad
+  pedido: "(default)",      // el valor de ?cabeza= tal como llegó
 
   activar() {
     if (this.activa) return this;
@@ -93,9 +118,21 @@ const Cabeza = {
     // ?cabeza=cruda desactiva la predicción (para comparar a ojo en el visor);
     // ?cabeza=absoluta usa el evento con magnetómetro, que no deriva pero
     // puede empeorar cerca de los imanes del visor (§9.8).
-    const pedido = params.get("cabeza");
-    if (pedido === "cruda") this.modo = "cruda";
-    if (pedido === "absoluta") this.evento = "deviceorientationabsolute";
+    //
+    // Tolerante con el género y con abreviaturas a propósito: en la prueba del
+    // 2026-07-25 el HUD reportó "predictiva" con ?cabeza=cruda pedido, y el
+    // sospechoso número uno es un valor escrito distinto (crudo/raw). Un
+    // parámetro de diagnóstico que falla en silencio hace perder una ronda
+    // entera, así que además avisa por consola si no reconoce el valor.
+    const pedido = (params.get("cabeza") || "").toLowerCase();
+    if (pedido) {
+      if (/^(cruda|crudo|raw|sin|off|no)$/.test(pedido)) this.modo = "cruda";
+      else if (/^(predictiva|predictivo|pred|si|on)$/.test(pedido)) this.modo = "predictiva";
+      else if (/^(absoluta|absoluto|abs)$/.test(pedido)) this.evento = "deviceorientationabsolute";
+      else console.warn(`?cabeza=${pedido} no se reconoce; ` +
+        `valores válidos: cruda | predictiva | absoluta`);
+    }
+    this.pedido = pedido || "(default)";
 
     this._onEvento = e => {
       // Con el sensor ausente Chrome puede entregar el evento con los tres
@@ -108,8 +145,17 @@ const Cabeza = {
       this.beta = (e.beta || 0) * D;
       this.gamma = (e.gamma || 0) * D;
       const ahora = performance.now();
-      const ms = ahora - this._t0;
-      if (ms > 0) this.hz = this.eventos * 1000 / ms;
+      // Frecuencia RECIENTE, no el promedio desde que arrancó.
+      // En la prueba del dueño el HUD mostró 9 Hz en una captura y 20–25 Hz en
+      // otras del mismo teléfono: era el promedio contaminado por el arranque,
+      // cuando todavía no llegaban eventos. Con una ventana corta el número
+      // sirve para decidir.
+      this._sellos.push(ahora);
+      while (this._sellos.length > 2 && ahora - this._sellos[0] > 2000) this._sellos.shift();
+      if (this._sellos.length >= 2) {
+        const lapso = ahora - this._sellos[0];
+        if (lapso > 0) this.hz = (this._sellos.length - 1) * 1000 / lapso;
+      }
       // se guardan las dos últimas muestras con su tiempo: de ahí sale la
       // velocidad angular con la que se extrapola entre muestras
       this._qAnt.copy(this._qAct); this._tAnt = this._tAct;
@@ -164,6 +210,7 @@ const Cabeza = {
     if (this._onEvento) removeEventListener(this.evento, this._onEvento, true);
     this.fuente = "ninguna";
     this._tAct = this._tAnt = this._tAplic = 0;
+    this._sellos.length = 0;
   },
 
   /* Ángulo de rotación de la pantalla, en radianes */
@@ -300,6 +347,7 @@ const DisplayCardboard = {
   teclas: {},
   corriendo: false,
   mouse: false,             // fallback de escritorio: mouse look si no hay sensores
+  sepPx: null,              // separación de centros de imagen; null = mitad del canvas
   pitch: 0,
   _rafId: 0, _prev: 0,
   _fovPrevio: 60,
@@ -313,6 +361,34 @@ const DisplayCardboard = {
     this.stereo.aspect = 0.5;      // per-eye aspect = camera.aspect * 0.5 (§9.7)
     this.stereo.eyeSep = IPD;
     this._size = new THREE.Vector2();
+    // Separación de imágenes: ?sep= manda; si no, la última calibrada en ESTE
+    // dispositivo; si tampoco, la mitad del canvas (sin corrección). Es un
+    // valor por visor + teléfono, así que recordarlo importa: encontrarlo
+    // cuesta una prueba con el visor puesto.
+    // `?sep=auto` (o 0, o reset) BORRA la calibración guardada y vuelve al
+    // default. No es un lujo: un valor recordado que pisa el default sin
+    // decir nada es justo lo que arruina una medición, y ya pasó en la
+    // verificación. Por eso además se informa de dónde salió el valor y el
+    // HUD lo muestra en pantalla.
+    const pedidoSep = params.get("sep");
+    let fuenteSep = "default (mitad del canvas)";
+    if (/^(auto|reset|0)$/i.test(pedidoSep || "")) {
+      this.sepPx = null;
+      try { localStorage.removeItem(SEP_CLAVE); } catch (e) {}
+      fuenteSep = "?sep=auto (calibración borrada)";
+    } else if (pedidoSep) {
+      this.sepPx = Math.max(SEP_MIN, +pedidoSep | 0);
+      fuenteSep = `?sep=${this.sepPx}`;
+    } else {
+      let guardado = null;
+      try { guardado = localStorage.getItem(SEP_CLAVE); } catch (e) {}
+      if (guardado) {
+        this.sepPx = Math.max(SEP_MIN, +guardado | 0);
+        fuenteSep = `recordada en este dispositivo (${this.sepPx} px)`;
+      }
+    }
+    this.fuenteSep = fuenteSep;
+    console.log("separación de imágenes:", fuenteSep);
     if (this._listo) return this;
     this._listo = true;
 
@@ -384,6 +460,7 @@ const DisplayCardboard = {
     // sin heredar el pitch del mouse look del modo plano.
     this.pitch = 0;
     this.rig.camera.rotation.set(0, 0, 0);
+    this.aplicarSepCss();
     Cabeza.activar();
 
     this._prev = performance.now();
@@ -422,6 +499,32 @@ const DisplayCardboard = {
     this.renderer.setViewport(0, 0, s.x, s.y);
   },
 
+  /* Separación entre los centros de imagen, en píxeles CSS. `null` = mitad
+     del canvas (comportamiento anterior, sin corrección). */
+  separacion() {
+    if (this.sepPx != null) return this.sepPx;
+    this.renderer.getSize(this._size);
+    return this._size.x / 2;
+  },
+
+  setSeparacion(px) {
+    this.renderer.getSize(this._size);
+    const max = this._size.x;                     // más que el ancho no tiene sentido
+    this.sepPx = Math.max(SEP_MIN, Math.min(max, Math.round(px)));
+    try { localStorage.setItem(SEP_CLAVE, String(this.sepPx)); } catch (e) {}
+    this.aplicarSepCss();
+    return this.sepPx;
+  },
+
+  /* Los overlays del DOM (el HUD por ojo) tienen que ir a los MISMOS centros
+     que la imagen, o el texto no fusiona aunque la escena sí. El CSS los ubica
+     con `calc(50% ± var(--sep)/2)`. */
+  aplicarSepCss() {
+    document.documentElement.style.setProperty("--sep", Math.round(this.separacion()) + "px");
+  },
+
+  ajustarSeparacion(delta) { return this.setSeparacion(this.separacion() + delta); },
+
   /* Estéreo por dos viewports (§9.7).
 
      Los tamaños van en píxeles CSS porque setViewport/setScissor los
@@ -431,7 +534,14 @@ const DisplayCardboard = {
      OJO con el aspect: `camera.aspect` es el del canvas COMPLETO y el que
      lo divide por ojo es `stereo.aspect = 0.5` (el bundle calcula
      `camera.aspect * stereo.aspect`). Poner W/2/H acá deja la imagen
-     estirada al doble. */
+     estirada al doble.
+
+     El desplazamiento de la separación (ver SEP_MIN, arriba) va en el
+     VIEWPORT y no en la matriz de proyección: el scissor sigue recortando la
+     mitad de pantalla, y el viewport corrido mueve la imagen dentro de ese
+     recorte. Tocar la proyección sería peor, porque StereoCamera la cachea y
+     sólo la reescribe cuando cambian sus parámetros: sumarle un offset cada
+     frame lo iría acumulando. */
   render() {
     const r = this.renderer, cam = this.rig.camera;
     r.getSize(this._size);
@@ -445,10 +555,14 @@ const DisplayCardboard = {
     this.rig.rig.updateMatrixWorld();
     this.stereo.update(cam);
 
+    // dx > 0 acerca las dos imágenes; con sep = W/2 queda en 0 y esto es
+    // idéntico al estéreo de mitades exactas
+    const dx = Math.round(W / 4 - this.separacion() / 2);
+
     r.setScissorTest(true);
-    r.setScissor(0, 0, w2, H); r.setViewport(0, 0, w2, H);
+    r.setScissor(0, 0, w2, H); r.setViewport(dx, 0, w2, H);
     r.render(this.scene, this.stereo.cameraL);
-    r.setScissor(w2, 0, W - w2, H); r.setViewport(w2, 0, W - w2, H);
+    r.setScissor(w2, 0, W - w2, H); r.setViewport(w2 - dx, 0, w2, H);
     r.render(this.scene, this.stereo.cameraR);
     r.setScissorTest(false);
     // Nota de medición: renderer.info se resetea al empezar cada render(),
@@ -458,10 +572,16 @@ const DisplayCardboard = {
 
   /* Estado para el HUD y para window.__vr */
   info() {
+    if (this.renderer) this.renderer.getSize(this._size);   // por si aún no hubo render
     return {
       fov: FOV_CARDBOARD, ipd: IPD,
+      separacionPx: Math.round(this.separacion()),
+      fuenteSeparacion: this.fuenteSep,
+      separacionDefaultPx: Math.round(this._size.x / 2),
+      desplazamientoPorOjoPx: Math.round(this._size.x / 4 - this.separacion() / 2),
       cabeza: Cabeza.fuente,
       modoCabeza: Cabeza.modo,
+      cabezaPedido: Cabeza.pedido,
       eventoCabeza: Cabeza.evento,
       eventos: Cabeza.eventos,
       hz: +Cabeza.hz.toFixed(1),

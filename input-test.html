@@ -260,7 +260,9 @@
      es cuánto ruido tiene el mando en reposo. */
   const DEADZONE_REF = 0.18;
   const previo = {};          // index → { botones: [], ejes: [] }
-  const PEGADOS = new Set();  // botones ya pulsados al conectar ⇒ ruido seguro
+  // Botones que ya venían pulsados al conectar: se ignoran HASTA QUE SE
+  // SUELTEN una vez. No son ruido permanente (ver el comentario en poll()).
+  const ESPERANDO_SOLTAR = new Set();
   let huboGamepad = false;
 
   addEventListener("gamepadconnected", e => {
@@ -328,25 +330,35 @@
         const antes = p.botones[i];
         if (antes === undefined) {
           p.botones[i] = b.value;
-          // Un botón que YA está pulsado cuando aparece el mando está pegado
-          // o es basura del descriptor HID (el ONSET del dueño llega con el 3
-          // así). Se marca desde el arranque, sin esperar capturas.
+          // Un botón que YA está pulsado cuando aparece el mando no se puede
+          // contar como pulsación: no sabemos si es basura del descriptor HID
+          // o si el dueño lo tenía apretado justo al conectar.
+          //
+          // CORREGIDO tras la segunda prueba real (2026-07-25): la primera
+          // versión lo marcaba como ruido PERMANENTE, y esa vez el que vino
+          // pulsado fue el botón 12, que es real y se usó seis veces. Ahora
+          // sólo se exige que se SUELTE una vez antes de contarlo — que es el
+          // debounce correcto y no descarta hardware bueno.
           if (b.pressed) {
-            PEGADOS.add(`gp${g.index} b${i}`);
-            log("gamepad", `gp${g.index} botón ${i} YA VENÍA PULSADO al conectar ` +
-              `→ se trata como ruido, no como botón físico`, "warn");
-            anotar(`gp${g.index} botón ${i}`, "PEGADO al conectar (ruido)", b.value);
+            ESPERANDO_SOLTAR.add(`gp${g.index} b${i}`);
+            log("gamepad", `gp${g.index} botón ${i} ya venía pulsado al conectar ` +
+              `→ se ignora hasta que se suelte una vez`, "warn");
           }
           return;
         }
+        const clave = `gp${g.index} b${i}`;
         // los botones analógicos (gatillos) informan `value`, no sólo `pressed`
         if (b.pressed !== antes >= 0.5 || Math.abs(b.value - antes) > 0.15) {
           log("gamepad", `gp${g.index} botón ${i} ${b.pressed ? "ABAJO" : "arriba"} value=${b.value.toFixed(2)}`,
             b.pressed ? "ok" : "");
-          if (b.pressed) {
+          if (!b.pressed && ESPERANDO_SOLTAR.has(clave)) {
+            // se soltó: de acá en adelante cuenta como botón normal
+            ESPERANDO_SOLTAR.delete(clave);
+            log("gamepad", `gp${g.index} botón ${i} soltado → ya cuenta como botón real`);
+          } else if (b.pressed && !ESPERANDO_SOLTAR.has(clave)) {
             anotar(`gp${g.index} botón ${i}`, "botón del mando", b.value);
             p.vistos.add("b" + i);
-            Asis.candidato(`gp${g.index} b${i}`);
+            Asis.candidato(clave);
           }
         }
         p.botones[i] = b.value;
@@ -459,16 +471,20 @@
       this._pedir();
     },
 
-    /* Dos filtros de ruido, independientes:
-       1. Los botones que YA venían pulsados al conectar el mando (PEGADOS).
-          No necesita ninguna captura y es el que agarra el botón 3 del ONSET.
-       2. Los que aparecen en la mayoría de las capturas: un botón que se
-          enciende con todo no distingue ninguna acción, por definición. Este
-          agarra al 4, que se alterna en contrafase con cada pulsación real.
-       Hace falta al menos 2 capturas para el segundo; con menos no hay
-       diferencia entre "aparece siempre" y "sólo lo probé una vez". */
+    /* Filtro de ruido: descarta los botones que aparecen en la mayoría de las
+       capturas, porque un botón que se enciende con todo no distingue ninguna
+       acción, por definición. Es el que agarra el par 3/4 del ONSET, que se
+       alterna en contrafase con cada pulsación real.
+
+       Hace falta al menos 2 capturas: con una sola no hay diferencia entre
+       "aparece siempre" y "sólo lo probé una vez".
+
+       Los botones que venían pulsados al conectar NO entran acá: ese caso se
+       resuelve antes, en poll(), exigiendo que se suelten una vez. Marcarlos
+       como ruido permanente fue un error de la primera versión — en la segunda
+       prueba real el que vino pulsado era el 12, que es un botón bueno. */
     ruido() {
-      const fuera = new Set(PEGADOS);
+      const fuera = new Set();
       const cuenta = new Map(), total = Object.values(this.capturas).filter(Boolean).length;
       for (const cands of Object.values(this.capturas)) {
         if (!cands) continue;
