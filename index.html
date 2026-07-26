@@ -44,6 +44,9 @@
          queda recordado en este dispositivo. -->
     <button id="btn-sep-menos" type="button" hidden title="acercar las dos imágenes">▶◀</button>
     <button id="btn-sep-mas" type="button" hidden title="separar las dos imágenes">◀▶</button>
+    <!-- P7: sólo aparece si el dispositivo dice que puede abrir immersive-vr.
+         Es un driver ALTERNATIVO al cardboard, no su reemplazo. -->
+    <button id="btn-xr" type="button" hidden>Probar WebXR</button>
     <button id="btn-salir" type="button" hidden>Salir</button>
   </div>
 
@@ -70,6 +73,7 @@
   <script src="js/input.js"></script>
   <script src="js/display-flat.js"></script>
   <script src="js/display-cardboard.js"></script>
+  <script src="js/display-webxr.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

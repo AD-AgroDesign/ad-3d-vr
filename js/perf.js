@@ -86,11 +86,18 @@ const Perf = {
   _sobre: 0, _bajo: 0,   // acumuladores de la histéresis, en ms
   _ultimoCambio: "",
 
-  /* Elección de tier: ?tier= manda; si no, autodetección conservadora. */
+  /* Elección de tier: ?tier= manda; si no, autodetección conservadora.
+
+     ⚠️ Hasta P7 el modo `xr` forzaba el tier `quest`. Se sacó: WebXR se está
+     probando EN EL TELÉFONO, y `quest` tiene radio de matas 250 m contra los
+     300 del tier `phone` — o sea que entrar en XR bajaba la densidad y la
+     comparación contra el cardboard ACEPTADO por el dueño no sería justa (su
+     veredicto del 2026-07-26 fue explícito con los 250 m: «se notan los cortes
+     cuando el vuelo es alto»). El tier se sigue autodetectando y `?tier=quest`
+     queda disponible para cuando la prueba sea en un visor de verdad. */
   detectarTier() {
     const pedido = params.get("tier");
     if (pedido && TIERS[pedido]) return pedido;
-    if (navigator.xr && params.has("modo") && params.get("modo") === "xr") return "quest";
     const finoNo = matchMedia("(pointer: coarse)").matches;
     const chico = Math.min(innerWidth, innerHeight) < 800;
     return (finoNo && chico) ? "phone" : "desktop";

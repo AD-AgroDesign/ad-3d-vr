@@ -59,6 +59,28 @@ const PERFILES = [
     ignorar: [3, 4]
   },
   {
+    /* Controles de una sesión WebXR (P7). No entran por navigator.getGamepads()
+       sino por `session.inputSources[i].gamepad`, y el driver de XR los pasa
+       por `Input.gamepadsExtra`. El layout `xr-standard` está definido por la
+       especificación, así que ACÁ SÍ se puede mapear sin medir primero: ejes
+       2/3 = stick, botón 0 = gatillo, 1 = grip, 4 = A/X, 5 = B/Y.
+
+       Los dos controles reportan el mismo layout y los dos se leen: cualquiera
+       de las dos manos hace lo mismo. Es lo correcto para una primera sonda; si
+       en el Quest conviene separar manos, se hace con `handedness`. */
+    nombre: "xr-standard",
+    coincide: (id, gp) => gp.mapping === "xr-standard",
+    ejes: { avance: { eje: 3, signo: -1 }, giro: { eje: 2, signo: 1 } },
+    dpad: { adelante: 12, atras: 13, izquierda: 14, derecha: 15 },
+    botones: {
+      4: { corto: "toggleScenario", largo: "recenter" },
+      5: { corto: "tour", largo: "modo" },
+      0: { mantener: "subir" },
+      1: { mantener: "bajar" }
+    },
+    ignorar: []
+  },
+  {
     /* Mapeo estándar (Xbox/Touch/DualShock): el que se va a encontrar en el
        Quest en P7. Acá sí valen los índices del estándar. */
     nombre: "estándar",
@@ -109,6 +131,7 @@ const Input = {
   onAction: null,
   perfil: null,
   gamepadId: null,
+  gamepadsExtra: null,      // fuente adicional de gamepads (la registra el driver de XR)
   teclas: {},
   intent: { move: { x: 0, y: 0 }, turn: 0, rise: 0, turbo: false },
   /* Giro CONTINUO por default, decisión del dueño tras probar las dos
@@ -187,16 +210,22 @@ const Input = {
 
   /* Estado de un botón, con detección de flanco y pulsación larga.
      La acción corta se dispara al SOLTAR (no al pulsar): es la única forma de
-     que un botón pueda tener acción corta y larga sin disparar las dos. */
-  _botones(gp, p) {
+     que un botón pueda tener acción corta y larga sin disparar las dos.
+
+     `clave` distingue el mando: con DOS mandos del mismo perfil (los dos
+     controles de un Quest, que comparten layout) un estado por índice de botón
+     los pisaría, y el que está suelto dispararía la acción corta del que está
+     pulsado en cada frame. Con un solo mando el comportamiento no cambia. */
+  _botones(gp, p, clave) {
     let rise = 0;
     for (const [idxTxt, mapa] of Object.entries(p.botones)) {
       const i = +idxTxt;
       const b = gp.buttons[i];
       if (!b) continue;
       if (p.ignorar.includes(i)) continue;
-      let st = this._btn[i];
-      if (!st) st = this._btn[i] = { abajo: false, t0: 0, largoHecho: false };
+      const k = clave + "#" + i;
+      let st = this._btn[k];
+      if (!st) st = this._btn[k] = { abajo: false, t0: 0, largoHecho: false };
 
       // el que venía pulsado al conectar no cuenta hasta que se suelte
       if (this._esperandoSoltar && this._esperandoSoltar.has(i)) {
@@ -243,8 +272,18 @@ const Input = {
     let turbo = !!(t.ShiftLeft || t.ShiftRight);
 
     /* --- gamepad --- */
-    const gps = navigator.getGamepads ? navigator.getGamepads() : [];
+    const gps = navigator.getGamepads ? Array.from(navigator.getGamepads()) : [];
+    /* Fuente extra: los controles de una sesión WebXR no aparecen en
+       navigator.getGamepads() sino en session.inputSources. El driver de XR
+       registra acá una función que los devuelve; con el hook en null (que es
+       el estado normal en flat y en cardboard) esto no hace nada. */
+    if (this.gamepadsExtra) {
+      try { for (const g of this.gamepadsExtra()) if (g) gps.push(g); }
+      catch (e) { console.warn("gamepadsExtra:", e && e.message); }
+    }
+    let n = 0;
     for (const gp of gps) {
+      const clave = (n++) + ":" + ((gp && gp.id) || "");
       if (!gp || !gp.connected) continue;
       const p = (this.perfil && this.gamepadId === gp.id) ? this.perfil : this._elegirPerfil(gp);
 
@@ -285,7 +324,7 @@ const Input = {
         }
       }
 
-      const riseBtn = this._botones(gp, p);
+      const riseBtn = this._botones(gp, p, clave);
       if (riseBtn) rise = riseBtn;
     }
 
@@ -300,6 +339,7 @@ const Input = {
       perfil: this.perfil ? this.perfil.nombre : null,
       mando: this.gamepadId,
       mandos: gps.length,
+      mandosXR: this.gamepadsExtra ? this.gamepadsExtra().length : 0,
       giro: this.giroContinuo ? "continuo" : "snap",
       calibrando: !!this.calib,
       esperandoSoltar: this._esperandoSoltar ? [...this._esperandoSoltar] : []

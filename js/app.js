@@ -10,12 +10,13 @@
      ?campo=<id>   campo a cargar          ?debug   expone window.__vr
      ?fps          HUD de medición         ?z=<n>   fuerza el zoom del atlas
      ?alt=<m>      altura inicial del ojo  ?sinsat  arranca sin satélite
-     ?modo=flat|cardboard                  ?tier=phone|quest|desktop
+     ?modo=flat|cardboard|xr               ?tier=phone|quest|desktop
      ?pose=aerea|dron|corredor             ?escenario=inicial|multi
      ?pr=<n>       pixelRatio (nitidez)    ?cabeza=predictiva|cruda|absoluta
      ?sep=<px>|auto  separación de los centros de imagen (fusión en el visor)
      ?calib        el stick ajusta la separación en vez de girar
      ?giro=snap    vuelve al giro de ±30° (el default es continuo)
+     ?fbs=<n>      escala del framebuffer en WebXR (nitidez contra fps)
 
    El reporte de verificación del núcleo de datos vive en verify.html, y el
    diagnóstico del dispositivo en diag.html.
@@ -103,6 +104,10 @@ function onResize() {
   // pantalla, y `aspect = 0/0` deja la matriz de proyección en NaN — o sea
   // pantalla negra hasta el próximo resize. Visto en el panel embebido.
   if (w < 1 || h < 1) return;
+  // En WebXR el tamaño del cuadro, la proyección y el fov los pone el runtime:
+  // setSize no tiene efecto mientras presenta y reajustar la viñeta acá le
+  // pisaría la escala calculada con el fov real del visor.
+  if (driver === DisplayWebXR && DisplayWebXR.corriendo) return;
   renderer.setSize(w, h, false);
   Rig.camera.aspect = w / h;
   Rig.camera.updateProjectionMatrix();
@@ -115,6 +120,7 @@ function onResize() {
 function aviso(html) {
   const el = document.getElementById("aviso");
   if (!el) return;
+  el.classList.remove("reporte");     // la pone sólo el reporte de WebXR
   if (!html) { el.style.display = "none"; el.innerHTML = ""; return; }
   el.style.display = "block";
   el.innerHTML = html;
@@ -187,22 +193,62 @@ async function salirVR() {
   actualizarBotones();
 }
 
+/* ---------- WebXR (P7, driver alternativo) ----------
+
+   Va por un botón aparte, no reemplazando "Entrar en VR": el cardboard es el
+   camino aceptado por el dueño y este es el experimento. La sesión exige un
+   GESTO del usuario, así que ?modo=xr no puede entrar solo — lo que hace es
+   que el botón principal pida XR en lugar de cardboard. */
+async function entrarXR() {
+  if (Rig.alturaOjo() > 60) { Rig.setAlturaOjo(Rig.alturaDron); Chunks.invalidar(); }
+  aviso("Abriendo la sesión WebXR…");
+  const r = await DisplayWebXR.entrar();
+  if (!r.ok) {
+    aviso(`<b>No se pudo abrir WebXR:</b> ${r.motivo}<br>` +
+      `El modo cardboard sigue disponible en "Entrar en VR".`);
+    actualizarBotones();
+    return;
+  }
+  aviso(null);
+  usarDriver(DisplayWebXR);
+  actualizarBotones();
+}
+
+/* Al terminar la sesión (la corte el usuario, el botón o el visor) se vuelve
+   al modo plano y se muestra el reporte de lo medido: dentro de la sesión el
+   DOM no se ve, así que ésta es la única forma de que el dueño lea los fps, el
+   framebuffer y si el mando llegó a la sesión. */
+function finXR(reporte) {
+  usarDriver(DisplayFlat);
+  aviso(`<b>Reporte de la sesión WebXR</b><pre>${(reporte || "").replace(/</g, "&lt;")}</pre>` +
+    `<small>También está en la consola y en <b>__vr.info().webxr</b>.</small>`);
+  const el = document.getElementById("aviso");
+  if (el) el.classList.add("reporte");
+  actualizarBotones();
+}
+
 function actualizarBotones() {
   const enVR = driver === DisplayCardboard;
+  const enXR = driver === DisplayWebXR;
   const btnVR = document.getElementById("btn-vr");
   const btnRec = document.getElementById("btn-recentrar");
   const btnSalir = document.getElementById("btn-salir");
+  const btnXR = document.getElementById("btn-xr");
   for (const id of ["btn-sep-menos", "btn-sep-mas"]) {
     const b = document.getElementById(id);
     if (b) b.hidden = !enVR;
   }
+  // el botón de XR sólo aparece si el dispositivo dice que puede: en un
+  // escritorio sin visor no tiene sentido ofrecerlo
+  if (btnXR) btnXR.hidden = !DisplayWebXR.soporte || enVR || enXR;
   if (!btnVR) return;
   // en cardboard el botón principal pasa a ser el de pantalla completa, y
   // desaparece cuando ya se está en pantalla completa
-  btnVR.textContent = enVR ? "Pantalla completa" : "Entrar en VR";
-  btnVR.hidden = enVR && Inmersion.enFullscreen();
+  btnVR.textContent = MODO === "xr" ? "Entrar en VR (WebXR)"
+    : (enVR ? "Pantalla completa" : "Entrar en VR");
+  btnVR.hidden = enXR || (enVR && Inmersion.enFullscreen());
   btnRec.hidden = !enVR;
-  btnSalir.hidden = !enVR;
+  btnSalir.hidden = !enVR && !enXR;
 }
 
 /* ---------- Arranque ---------- */
@@ -327,15 +373,27 @@ function actualizarBotones() {
 
     DisplayFlat.init(renderer, scene, Rig, cbs);
     DisplayCardboard.init(renderer, scene, Rig, Object.assign({ onAviso: aviso }, cbs));
+    DisplayWebXR.init(renderer, scene, Rig, Object.assign({ onAviso: aviso, onSalir: finXR }, cbs));
+    // La consulta es asíncrona y no bloquea el arranque: cuando contesta,
+    // aparece (o no) el botón de "Probar WebXR".
+    DisplayWebXR.disponible().then(ok => {
+      console.log("webxr immersive-vr soportado:", ok);
+      actualizarBotones();
+    });
 
     /* Botones. Con el visor puesto no se puede tocar la pantalla, así que
        estos son para ANTES de meter el teléfono; el mando llega en P5. */
     document.getElementById("btn-vr").addEventListener("click", () => {
-      if (driver === DisplayCardboard) Inmersion.entrar().then(actualizarBotones);
+      if (MODO === "xr") entrarXR();
+      else if (driver === DisplayCardboard) Inmersion.entrar().then(actualizarBotones);
       else entrarVR();
     });
+    document.getElementById("btn-xr").addEventListener("click", entrarXR);
     document.getElementById("btn-recentrar").addEventListener("click", () => DisplayCardboard.recentrar());
-    document.getElementById("btn-salir").addEventListener("click", salirVR);
+    document.getElementById("btn-salir").addEventListener("click", () => {
+      if (driver === DisplayWebXR) DisplayWebXR.salir();
+      else salirVR();
+    });
     // Calibración de la separación de imágenes. Se ajusta mirando la pantalla
     // a la distancia de las lentes, ANTES de meter el teléfono en el visor:
     // el valor correcto es el que hace que las dos vistas se fusionen en una.
@@ -360,16 +418,16 @@ function actualizarBotones() {
     if (DEBUG) {
       window.__vr = {
         state, renderer, scene, Rig, Sky, Tiles, TilesFondo, Ground, Veg, Perf, Chunks,
-        DisplayFlat, DisplayCardboard, Cabeza, Inmersion, Input, Vigneta,
+        DisplayFlat, DisplayCardboard, DisplayWebXR, Cabeza, Inmersion, Input, Vigneta,
         setScenario, applyOpacity, applyGrowth, extent,
-        aplicarPose: n => aplicarPose(n, extent), entrarVR, salirVR, usarDriver,
+        aplicarPose: n => aplicarPose(n, extent), entrarVR, salirVR, entrarXR, usarDriver,
         lonLatToScene, sceneToLonLat, projInfo,
         info: () => ({
           campo: state.campo.id, escenario: state.scenario,
           modo: driver ? driver.label : null,
           tiles: Tiles.info, suelo: Ground.info(), veg: Veg.info(),
           chunks: Chunks.info(), perf: Perf.snapshot(renderer),
-          estereo: DisplayCardboard.info(), input: Input.info(),
+          estereo: DisplayCardboard.info(), webxr: DisplayWebXR.info(), input: Input.info(),
           camara: {
             x: +Rig.rig.position.x.toFixed(1), z: +Rig.rig.position.z.toFixed(1),
             altura: +Rig.alturaOjo().toFixed(1), rumbo: +Rig.rumbo().toFixed(1)

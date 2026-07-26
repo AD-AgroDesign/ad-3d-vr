@@ -118,6 +118,14 @@ body.estereo #hud2 { left: calc(50% + var(--sep, 50vw) / 2); }
   background: rgba(40, 26, 10, .92); border: 1px solid #7a5c22; border-radius: 10px;
   padding: 10px 14px; font-size: 13px; line-height: 1.5;
 }
+/* El reporte de la sesión WebXR: es largo y son números, así que va alineado
+   a la izquierda y con scroll propio. Dentro de la sesión el DOM no se ve, así
+   que esto es lo único que queda de lo medido (P7). */
+#aviso.reporte { text-align: left; max-height: 60vh; overflow: auto; }
+#aviso pre {
+  margin: 6px 0; font: 12px/1.45 ui-monospace, monospace;
+  white-space: pre-wrap; word-break: break-word;
+}
 
 /* Atribución obligatoria de la imagen satelital (§9.1) */
 #credito {
