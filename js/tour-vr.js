@@ -65,29 +65,64 @@ const Tour = {
   ALT_APROX: 60,           // m — aproximación a un corredor
   ALT_PARCHE: 45,          // m — órbita sobre un parche leñoso
   RADIO_ORBITA: 130,       // m
-  /* Arco de los traslados. Un waypoint de pose recorre la distancia que sea en
-     el tiempo que tenga, así que entre dos puntos lejanos la velocidad se
-     dispara: medido, **891 m/s** en el salto al parche de monte. En un mapa eso
-     es un `easeTo` cualquiera; en un visor es un borrón que marea.
+  /* ALTURA DE LOS TRASLADOS. Un waypoint de pose recorre la distancia que sea
+     en el tiempo que tenga, así que entre dos puntos lejanos la velocidad se
+     dispara: medido, **891 m/s** en el salto al parche de monte. En un mapa
+     eso es un `easeTo` cualquiera; en un visor es un borrón que marea.
 
      La cura no es ir más lento —el tour duraría cinco minutos— sino SUBIR: lo
-     que marea es el flujo óptico, que va como v/h, así que un traslado rápido y
-     alto es cómodo y uno rápido y bajo no. Con el arco en 0,25 × la distancia,
-     el flujo del traslado queda en el orden del que tiene el vuelo manual que
-     el dueño aprobó (14 m/s a 18 m = 0,78 /s). Y de paso se ve como lo que es:
-     un dron que sube, cruza y baja. */
-  /* Flujo óptico objetivo de los traslados, en 1/s. El arco NO se calcula con
-     una fracción de la distancia —eso es un proxy y se equivocaba: en un
-     ascenso de 18 a 150 m la altura del medio del tramo es 84, no 150, y ahí
-     el flujo picaba en 1,33— sino despejándolo del criterio: la altura del
-     medio tiene que ser al menos `velocidad_pico / FLUJO_TRANSITO`. */
+     que marea es el flujo óptico, que va como v/h, así que un traslado rápido
+     y alto es cómodo y uno rápido y bajo no.
+
+     La altura de crucero del tramo se DESPEJA de ese criterio
+     (`velocidad_pico / FLUJO_TRANSITO`), no de una fracción de la distancia:
+     ese proxy se equivocaba justo en los ascensos —de 18 a 150 m la altura a
+     mitad de tramo es 84 y no 150— y dejaba picos de 1,33 /s contra los 0,78
+     de la configuración aprobada. */
   FLUJO_TRANSITO: 0.85,    // 1/s (la referencia aprobada es 0,78)
-  ALT_TRANSITO_MAX: 900,   // m
+  /* Presupuesto de subir y bajar. Es más holgado que el horizontal por dos
+     razones: subir mirando al frente barre menos imagen que trasladarse, y con
+     el número horizontal cada tramo se iba a más de veinte segundos. El 2,0
+     está calibrado contra lo que el dueño YA probó y le pareció «muy
+     agradable»: los descensos de esa versión andaban por ahí, y lo único que
+     objetó fue el rebote, que era la forma y no la velocidad. */
+  FLUJO_VERTICAL: 2.0,     // 1/s — ver _msPorCambioDeAltura
+  /* Altura a la que se QUIERE que crucen los traslados. Sin esto, un tramo de
+     2,4 km en 8 s necesita 600 m para cumplir el flujo, y el tour se pasaba
+     casi todo el tiempo tan arriba que no se ve la vegetación — que es el
+     activo visual del proyecto. La altura no es la única variable: dándole
+     TIEMPO al tramo baja la velocidad y con ella la altura necesaria. Un
+     traslado largo pasa a durar ~14 s en vez de 8 y cruza a 300 m. */
+  ALT_TRANSITO_OBJ: 300,   // m
+  ALT_TRANSITO_MAX: 900,   // m — tope duro
   /* El arco sube ANTES de que el traslado agarre velocidad. Con un seno pelado
      el pico de flujo se daba al cuarto del tramo —ya rápido y todavía bajo— y
      medía 1,53 /s contra los 0,78 de referencia. Con el exponente, a un décimo
      del tramo ya está a media altura. */
-  ARCO_EXP: 0.6,
+  /* Fracción del tramo que se usa para subir a la meseta y para bajar de ella.
+     La ventana es un smoothstep, no un seno elevado: con el seno la derivada
+     en t=0 es infinita y el primer frame del tramo daba **1805 m/s de
+     velocidad vertical** — un tirón hacia arriba que se siente como un golpe.
+     El smoothstep arranca con derivada cero. */
+  RAMPA_ARCO: 0.25,
+  /* ANTIRREBOTE. Reporte del dueño con el visor puesto (2026-07-26): «desciende
+     sobre un corredor y apenas toca el suelo vuelve a subir, parece que
+     rebota». Tenía razón y era un defecto del diseño del arco: un tramo bajaba
+     a 60 m y el siguiente, que era largo, tenía que subir a 200 para respetar
+     el flujo óptico. Cada tramo por separado estaba bien; el problema era la
+     costura entre dos.
+
+     Dos correcciones, y ninguna toca el criterio de flujo:
+     - el waypoint no baja por debajo de lo que el tramo SIGUIENTE va a
+       necesitar subir (esta constante es la fracción que se respeta);
+     - y dentro del tramo, la altura se SOSTIENE y baja al final en vez de
+       hacer una loma: `max(interpolación, altura_necesaria)`. Es lo que hace
+       un dron de verdad, y se lee como un solo movimiento.
+
+     Vale 1 y no 0,7: con 0,7 quedaban lomas de unos 50 m —el 30 % que no se
+     respetaba— y en el visor una loma de 50 m a esa altura todavía se ve. Con
+     1 el descenso hacia el corredor es monótono de punta a punta. */
+  ANTIRREBOTE: 1,
   /* Tope de giro AUTOMÁTICO. El usuario gira a 55 °/s y lo aprobó, pero ahí
      manda él; §9.11.3 marca la rotación que uno no controla como la causa
      número uno de mareo. Los rumbos de destino son al azar (como en el
@@ -125,7 +160,7 @@ const Tour = {
     if (!ruta.length) { console.warn("tour: no hay waypoints para este campo"); return false; }
     this.ruta = ruta; this.paso = -1; this.activo = true;
     this._ahora = ahora != null ? ahora : performance.now();
-    this._prev = { x: Rig.rig.position.x, z: Rig.rig.position.z };
+    this._prev = { x: Rig.rig.position.x, z: Rig.rig.position.z, alt: Rig.alturaOjo() };
     this._siguiente();
     return true;
   },
@@ -172,9 +207,16 @@ const Tour = {
        sea 0,78 /s—, así que el tour se siente como lo que el dueño ya validó
        y no hace falta inventar un criterio nuevo. */
     const p = Rig.rig.position;
-    const v = this._prev ? Math.hypot(p.x - this._prev.x, p.z - this._prev.z) / Math.max(dtMs / 1000, 1e-4) : 0;
-    this._prev = { x: p.x, z: p.z };
-    this.flujoOptico = v / Math.max(Rig.alturaOjo(), 2);
+    const alt = Rig.alturaOjo();
+    /* La velocidad va en 3D: el ascenso también genera flujo, y no poco —
+       subir 280 m en dos segundos desde 18 m de altura barre la imagen tanto
+       o más que cruzar el campo. Medirlo sólo en horizontal escondía
+       justamente los tirones verticales del arranque de cada tramo. */
+    const v = this._prev
+      ? Math.hypot(p.x - this._prev.x, p.z - this._prev.z, alt - this._prev.alt) / Math.max(dtMs / 1000, 1e-4)
+      : 0;
+    this._prev = { x: p.x, z: p.z, alt };
+    this.flujoOptico = v / Math.max(alt, 2);
     const FLUJO_REF = Rig.vel.dron / Rig.ALT_REF;
     Rig.flujoTour = Math.min(1, this.flujoOptico / FLUJO_REF) * this.vinetaFactor;
 
@@ -208,13 +250,15 @@ const Tour = {
          medía **294 °/s** de latigazo, justo al empezar el tramo más lindo.
          Alargar el tramo cuesta unos segundos de tour y llega apuntando bien.
          El easing pica en 1,5 × Δ/T, de ahí el factor. */
-      wp.msReal = Math.max(wp.ms, 1500 * Math.abs(delta) / this.GIRO_MAX);
-
       const D = Math.hypot(wp.x - d.x, wp.z - d.z);
+      const msBase = Math.max(wp.ms, 1500 * Math.abs(delta) / this.GIRO_MAX, this._msPorDistancia(D));
+      const hC = Math.min(this.ALT_TRANSITO_MAX, (1.5 * D / (msBase / 1000)) / this.FLUJO_TRANSITO);
+      // …y el tramo también tiene que durar lo suficiente para SUBIR hasta la
+      // meseta sin pasarse del flujo (ver el comentario de _msPorAscenso)
+      wp.msReal = Math.max(msBase,
+        this._msPorCambioDeAltura(d.alt, hC), this._msPorCambioDeAltura(wp.alt, hC));
       const vPico = 1.5 * D / (wp.msReal / 1000);
-      const hMedio = (d.alt + wp.alt) / 2;              // la altura a mitad de tramo
-      const hNecesaria = Math.min(this.ALT_TRANSITO_MAX, vPico / this.FLUJO_TRANSITO);
-      wp.arco = Math.max(0, hNecesaria - hMedio);
+      wp.hCrucero = Math.min(this.ALT_TRANSITO_MAX, vPico / this.FLUJO_TRANSITO);
     }
     this._anunciar(wp.msg || "");
     // el rig se movió de golpe entre tramos lejanos: que el culling no espere
@@ -228,8 +272,29 @@ const Tour = {
     const s = t * t * (3 - 2 * t);
     const d = this._desde;
     Rig.setPosicion(d.x + (wp.x - d.x) * s, d.z + (wp.z - d.z) * s);
-    const arco = (wp.arco || 0) * Math.pow(Math.sin(Math.PI * t), this.ARCO_EXP);
-    Rig.setAlturaOjo(d.alt + (wp.alt - d.alt) * s + arco);
+    /* Altura: la interpolación, pero SOSTENIDA en la altura de crucero
+       mientras el tramo va rápido. Con `max` el perfil sube al principio si
+       hace falta, se mantiene, y baja recién al final — un solo movimiento de
+       dron. Antes era una suma (una loma) y eso, encadenado con el tramo
+       anterior, era el "rebote" que reportó el dueño. La ventana vale 0 en
+       t=1, así que el tramo TERMINA en la altura exacta del waypoint: es lo
+       que permite que la aproximación empalme con el rasante. */
+    /* La altura se interpola EN LOGARITMO, no en metros. Bajar de 300 a 18 m
+       en línea recta significa acercarse al suelo a velocidad constante, y el
+       flujo óptico —que es v/h— se dispara justo al final: medido, 3,3 /s
+       contra los 0,78 de referencia. En logaritmo la velocidad vertical baja
+       con la altura, que es como desciende un dron de verdad, y el flujo queda
+       CONSTANTE durante todo el descenso.
+
+       Tres tramos: subir a la meseta en la rampa de entrada, cruzar, y bajar
+       en la de salida. En t=0 y en t=1 da exactamente las alturas pedidas. */
+    const r = this.RAMPA_ARCO;
+    const suave = x => { const c = Math.max(0, Math.min(1, x)); return c * c * (3 - 2 * c); };
+    const entrada = suave(t / r), salida = suave((t - (1 - r)) / r);
+    const lnA = Math.log(Math.max(d.alt, 2)), lnB = Math.log(Math.max(wp.alt, 2));
+    const lnC = Math.log(Math.max(wp.hCrucero || 0, Math.max(d.alt, wp.alt), 2));
+    const ln = lnA * (1 - entrada) + lnC * (entrada - salida) + lnB * salida;
+    Rig.setAlturaOjo(Math.exp(ln));
     Rig.setRumbo(d.rumbo + (wp.delta || 0) * s);
   },
 
@@ -357,7 +422,63 @@ const Tour = {
     }
     wp.push({ tipo: "pose", x: cx, z: cz, alt: this.ALT_GENERAL, rumbo: rnd(-30, 30), ms: 8000,
               msg: "Vista general del paisaje rediseñado" });
+    this._antirrebote(wp);
     return wp;
+  },
+
+  /* Segunda mitad del antirrebote: se estima con las posiciones planificadas
+     cuánta altura va a necesitar CADA tramo, y se levanta la llegada del
+     anterior para que no baje a un lugar del que tiene que salir subiendo.
+
+     El tramo que precede al rasante queda intacto a propósito: el siguiente es
+     el vuelo, que no necesita altura, así que ahí el descenso a 18 m es el que
+     corresponde y es el que se quiere ver. */
+  /* Cuánto tiene que durar un traslado de D metros para cruzar a la altura
+     objetivo sin pasarse del flujo. El 1,5 es el pico del easing. */
+  _msPorDistancia(D) {
+    return 1500 * D / (this.FLUJO_TRANSITO * this.ALT_TRANSITO_OBJ);
+  },
+
+  /* Cuánto tiene que durar el tramo para que el cambio de altura tampoco se
+     pase del flujo. Con la altura en logaritmo el flujo vertical es
+     |Δln h| / tiempo_de_rampa, así que despejar el tiempo es directo.
+
+     El presupuesto vertical es más holgado que el horizontal a propósito:
+     subir y bajar mirando al frente barre mucho menos la imagen que trasladarse,
+     y con el mismo número los tramos se irían a más de veinte segundos cada
+     uno. Es un dial: si en el visor las subidas molestan, se baja. */
+  _msPorCambioDeAltura(altDesde, hMeseta) {
+    const dln = Math.abs(Math.log(Math.max(hMeseta, 2)) - Math.log(Math.max(altDesde, 2)));
+    return 1500 * dln / (this.RAMPA_ARCO * this.FLUJO_VERTICAL);
+  },
+
+  _antirrebote(wp) {
+    let prev = { x: Rig.rig.position.x, z: Rig.rig.position.z };
+    /* La estimación usa la MISMA fórmula que el tramo real (duración incluida),
+       o el número no sirve: con `ms` a secas daba 608 m donde el tramo después
+       volaba a 516, y esos 90 m de diferencia son otra loma. Lo que no se
+       puede prever acá es cuánto va a girar —depende del rumbo que tenga el
+       rig al llegar—, y eso sólo ALARGA el tramo, o sea que baja la altura
+       necesaria: la estimación queda del lado seguro. */
+    const necesita = wp.map(w => {
+      if (w.tipo !== "pose") return 0;
+      const D = Math.hypot(w.x - prev.x, w.z - prev.z);
+      prev = { x: w.x, z: w.z };
+      const ms = Math.max(w.ms, this._msPorDistancia(D));
+      return Math.min(this.ALT_TRANSITO_MAX, (1.5 * D / (ms / 1000)) / this.FLUJO_TRANSITO);
+    });
+    for (let i = 0; i < wp.length - 1; i++) {
+      if (wp[i].tipo !== "pose") continue;
+      /* No basta con mirar el CRUCERO del tramo siguiente: también hay que
+         mirar **dónde termina**. El último tramo bajaba a 62 m y el siguiente
+         subía a los 150 de la vista general — 87 m de rebote medidos, y el
+         mismo defecto que reportó el dueño, sólo que al final del recorrido.
+         Sólo levanta: si lo que viene es más bajo (el descenso al corredor),
+         esto no toca nada. */
+      const sig = wp[i + 1];
+      const altSig = sig.tipo === "vuelo" ? 0 : (sig.alt || 0);
+      wp[i].alt = Math.max(wp[i].alt, necesita[i + 1] * this.ANTIRREBOTE, altSig);
+    }
   },
 
   info() {

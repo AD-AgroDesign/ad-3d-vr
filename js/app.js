@@ -431,8 +431,17 @@ function actualizarBotones() {
       onAction: acc => {
         /* Cualquier acción que no sea el propio tour lo corta: si no, el
            usuario y el tour se pelearían por el rig. Es lo que hace el
-           original con los eventos del canvas (main.js:1163). */
-        if (acc !== "tour" && Tour.activo) Tour.detener("acción del usuario");
+           original con los eventos del canvas (main.js:1163).
+
+           **Con una excepción, pedida por el dueño tras probar el tour en el
+           visor (2026-07-26): conmutar el paisaje NO lo corta.** Y tiene toda
+           la lógica: es la acción estrella del proyecto (§9.13, punto 3) y es
+           la única que no pelea por el rig — no mueve nada, cambia lo que se
+           ve. Poder alternar Actual / Multifuncional desde el mismo punto de
+           vista, mientras el tour sigue volando, es la mejor demostración que
+           tiene la app. */
+        if (acc !== "tour" && acc !== "toggleScenario" && Tour.activo)
+          Tour.detener("acción del usuario");
         if (acc === "toggleScenario") setScenario(state.scenario === "inicial" ? "multi" : "inicial");
         else if (acc === "home") { aplicarPose("aerea", extent); Chunks.invalidar(); }
         else if (acc === "modo") { Rig.alternarModo(); Chunks.invalidar(); }
