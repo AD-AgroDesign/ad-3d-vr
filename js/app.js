@@ -14,6 +14,8 @@
      ?pose=aerea|dron|corredor             ?escenario=inicial|multi
      ?pr=<n>       pixelRatio (nitidez)    ?cabeza=predictiva|cruda|absoluta
      ?sep=<px>|auto  separación de los centros de imagen (fusión en el visor)
+     ?calib        el stick ajusta la separación en vez de girar
+     ?giro=snap    vuelve al giro de ±30° (el default es continuo)
 
    El reporte de verificación del núcleo de datos vive en verify.html, y el
    diagnóstico del dispositivo en diag.html.
@@ -311,6 +313,9 @@ function actualizarBotones() {
         // el snap lo ejecuta el rig (transición de 80 ms, §9.11.3)
         else if (acc === "snapIzq") Rig.snap(-1);
         else if (acc === "snapDer") Rig.snap(+1);
+        // ?calib: ajustar la separación con el mando, con el visor puesto
+        else if (acc === "sepMenos") aviso(textoSeparacion(DisplayCardboard.ajustarSeparacion(-4)));
+        else if (acc === "sepMas") aviso(textoSeparacion(DisplayCardboard.ajustarSeparacion(+4)));
         else if (acc === "tour") console.log("tour: llega en P6");
         else if (acc === "menu") console.log("menú in-world: llega en P6");
       }

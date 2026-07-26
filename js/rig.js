@@ -35,7 +35,37 @@ const Rig = {
   // Velocidades (§9.11.4): constantes, sin inercia. Rampa corta en el driver.
   vel: { suelo: 3.5, dron: 14 },
   velSubida: 12,
-  velGiro: 90 * DEG,       // giro continuo en escritorio; en VR es snap (P5)
+
+  /* Giro CONTINUO, a pedido del dueño (2026-07-26): «el giro que no es
+     continuo, con esos saltos de ±30°, se hace rara la navegación».
+     §9.11.3 recomendaba snap por confort y dejaba el continuo como opción
+     explícita, limitado a ~45 °/s; §12.4 dice que cuando el dueño elige entre
+     dos variantes, la elección manda. Queda en 55 °/s, que es el techo de lo
+     cómodo, y el snap sigue disponible con ?giro=snap. */
+  velGiro: 55 * DEG,
+  tauGiro: 90,             // ms de rampa del giro: sin esto el paneo arranca de golpe
+  _turn: 0,                // giro suavizado
+
+  /* La velocidad de avance CRECE CON LA ALTURA.
+
+     A pedido del dueño (2026-07-26): «la velocidad en el suelo es buena, pero
+     en altura parece que no avanza». Es correcto y es geometría, no impresión:
+     el flujo óptico que ve el ojo va como v/h, así que a 300 m la misma
+     velocidad se percibe 17 veces más lenta que a 18 m.
+
+     Compensar del todo (v ∝ h) haría que desde la vista aérea se cruce el
+     campo en tres segundos, así que se compensa PARCIALMENTE con un exponente
+     y un techo. A la altura de dron (18 m) el factor es 1: la velocidad que
+     ya le gustaba no se toca. */
+  ALT_REF: 18,             // m: altura donde el factor vale 1
+  ALT_EXP: 0.7,
+  velMax: 100,             // m/s
+
+  factorAltura() {
+    const a = this.alturaOjo();
+    if (a <= this.ALT_REF) return 1;
+    return Math.pow(a / this.ALT_REF, this.ALT_EXP);
+  },
 
   init(scene, aspect) {
     this.rig = new THREE.Group();
@@ -164,11 +194,10 @@ const Rig = {
 
   /* --- Confort (§9.11) ---
 
-     Snap turn: ±30° con una transición corta en vez de un salto seco. El giro
-     continuo por mando es la causa número uno de mareo, así que el default es
-     snap y el continuo queda detrás de ?giro=continuo. La transición es POR
-     TIEMPO (§12.2), no por frame: con 60 fps en cardboard y 72–90 en XR tiene
-     que durar lo mismo.
+     Snap turn: ±30° con una transición corta en vez de un salto seco. Quedó
+     como ALTERNATIVA (`?giro=snap`): el dueño probó las dos y eligió continuo.
+     La transición es POR TIEMPO (§12.2), no por frame: con 60 fps en cardboard
+     y 72–90 en XR tiene que durar lo mismo.
 
      Rampa de velocidad: sin ella, con un mando digital el avance es un escalón
      de 0 a velocidad plena. Con el stick analógico del mando del dueño la
@@ -201,7 +230,9 @@ const Rig = {
     const th = this.rig.rotation.y;
     // adelante = (-sin θ, -cos θ); derecha = (cos θ, -sin θ)  en (x, z)
     const sin = Math.sin(th), cos = Math.cos(th);
-    const v = (this.modo === "suelo" ? this.vel.suelo : this.vel.dron) * (intent.turbo ? 4 : 1);
+    const vBase = (this.modo === "suelo" ? this.vel.suelo : this.vel.dron) * (intent.turbo ? 4 : 1);
+    // el factor de altura sólo se aplica volando: en modo suelo vale 1
+    const v = Math.min(this.velMax * (intent.turbo ? 4 : 1), vBase * this.factorAltura());
     if (this._mv.x || this._mv.y) {
       const fx = -sin * this._mv.y + cos * this._mv.x;
       const fz = -cos * this._mv.y - sin * this._mv.x;
@@ -212,7 +243,12 @@ const Rig = {
       this.rig.position.x += fx * esc * v * dt;
       this.rig.position.z += fz * esc * v * dt;
     }
-    this.velocidad = Math.hypot(this._mv.x, this._mv.y) * v;   // la usa la viñeta
+    this.velocidad = Math.hypot(this._mv.x, this._mv.y) * v;
+    /* La viñeta se maneja con el FLUJO ÓPTICO, no con la velocidad en m/s: si
+       la velocidad crece con la altura para compensar la perspectiva, el flujo
+       que ve el ojo queda parejo, y una viñeta atada a los m/s estaría siempre
+       al máximo desde el aire justamente cuando menos hace falta. */
+    this.flujo = Math.min(1, Math.hypot(this._mv.x, this._mv.y));
 
     // Snap: se consume a velocidad constante hasta agotar los grados
     if (this._snapRestante) {
@@ -221,7 +257,11 @@ const Rig = {
       this.rig.rotation.y -= d * DEG;
       this._snapRestante -= d;
     }
-    if (intent.turn) this.rig.rotation.y -= intent.turn * this.velGiro * dt;
+    // Giro continuo con rampa propia: el paneo no puede arrancar de golpe
+    const turnObj = intent.turn || 0;
+    this._turn += (turnObj - this._turn) * (1 - Math.exp(-(dt * 1000) / this.tauGiro));
+    if (Math.abs(this._turn) < 1e-4) this._turn = 0;
+    if (this._turn) this.rig.rotation.y -= this._turn * this.velGiro * dt;
 
     if (intent.rise) {
       const alt = this.alturaOjo() + intent.rise * this.velSubida * (intent.turbo ? 4 : 1) * dt;
@@ -230,7 +270,8 @@ const Rig = {
     }
   },
 
-  velocidad: 0
+  velocidad: 0,
+  flujo: 0
 };
 
 /* ============================================================
@@ -249,7 +290,6 @@ const Rig = {
 const Vigneta = {
   malla: null,
   opacidadMax: 0.55,
-  velPlena: 8,              // m/s a partir de los cuales está al máximo
   _tau: 140,                // ms de entrada/salida
 
   init(rig) {
@@ -295,10 +335,11 @@ const Vigneta = {
     this.malla.scale.setScalar(h * Math.sqrt(1 + a * a));    // semidiagonal
   },
 
-  /* `vel` en m/s; el amortiguado es por tiempo, no por frame */
+  /* Se maneja con `rig.flujo` (0–1), no con los m/s: ver el comentario del
+     flujo óptico en Rig.update. El amortiguado es por tiempo, no por frame. */
   update(rig, dtMs) {
     if (!this.malla) return;
-    const objetivo = Math.min(1, (rig.velocidad || 0) / this.velPlena) * this.opacidadMax;
+    const objetivo = (rig.flujo || 0) * this.opacidadMax;
     const u = this.malla.material.uniforms.opacidad;
     u.value += (objetivo - u.value) * (1 - Math.exp(-dtMs / this._tau));
     if (u.value < 0.004) { u.value = 0; this.malla.visible = false; }

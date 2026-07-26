@@ -111,7 +111,12 @@ const Input = {
   gamepadId: null,
   teclas: {},
   intent: { move: { x: 0, y: 0 }, turn: 0, rise: 0, turbo: false },
-  giroContinuo: false,      // ?giro=continuo
+  /* Giro CONTINUO por default, decisión del dueño tras probar las dos
+     variantes (2026-07-26): «con esos saltos de ±30° se hace rara la
+     navegación». §9.11.3 recomendaba snap, y sigue disponible con ?giro=snap;
+     §12.4: cuando el dueño elige entre dos variantes, la elección manda.
+     El límite de velocidad de giro y la rampa viven en rig.js. */
+  giroContinuo: true,       // ?giro=snap para volver al snap de ±30°
   _btn: {},                 // índice → { abajo, t0, largoHecho }
   _esperandoSoltar: null,   // botones pulsados al aparecer el mando
   _snapArmado: true,
@@ -119,7 +124,16 @@ const Input = {
 
   init({ onAction } = {}) {
     this.onAction = onAction;
-    this.giroContinuo = params.get("giro") === "continuo";
+    if (params.get("giro") === "snap") this.giroContinuo = false;
+    if (params.get("giro") === "continuo") this.giroContinuo = true;
+    /* Modo calibración (`?calib`): el horizontal del stick deja de girar y pasa
+       a ajustar la separación de imágenes. Existe porque la separación buena
+       DEPENDE DEL DISPOSITIVO — el dueño lo comprobó: en otro teléfono
+       necesitó unos píxeles más — y con el visor puesto no se puede tocar la
+       pantalla, pero sí se puede usar el mando. Se abre esta URL una vez por
+       dispositivo, se ajusta hasta que las dos vistas fusionan, y el valor
+       queda recordado. */
+    this.calib = params.has("calib");
 
     addEventListener("keydown", e => {
       if (e.repeat) return;
@@ -250,7 +264,16 @@ const Input = {
          (eje analógico y D-pad) entran por el mismo umbral, porque un botón
          visto como eje va 0 → ±1 → 0 y cruza igual. */
       const vGiro = ejeGiro || dp.x;
-      if (this.giroContinuo) {
+      if (this.calib) {
+        // en calibración el horizontal ajusta la separación, con el mismo
+        // umbral + rearme del snap (un paso por movimiento, no uno por frame)
+        if (this._snapArmado && Math.abs(vGiro) > SNAP_UMBRAL) {
+          this._snapArmado = false;
+          this._accion(vGiro > 0 ? "sepMas" : "sepMenos");
+        } else if (!this._snapArmado && Math.abs(vGiro) < SNAP_REARME) {
+          this._snapArmado = true;
+        }
+      } else if (this.giroContinuo) {
         if (vGiro) turn = vGiro;
       } else {
         const v = vGiro;
@@ -278,6 +301,7 @@ const Input = {
       mando: this.gamepadId,
       mandos: gps.length,
       giro: this.giroContinuo ? "continuo" : "snap",
+      calibrando: !!this.calib,
       esperandoSoltar: this._esperandoSoltar ? [...this._esperandoSoltar] : []
     };
   }

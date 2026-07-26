@@ -26,19 +26,40 @@
    los datos: cada instancia cuesta memoria y tiempo de construcción aunque
    después no se dibuje. El tier `desktop` reproduce exactamente los valores
    del proyecto original, así que los conteos de regresión siguen dando. */
+/* ⚠️ TABLA RETOCADA CON MEDICIONES EN EL TELÉFONO REAL (2026-07-26), no con
+   las estimaciones de §9.5. Lo que dijo el dueño después de probar:
+
+   - Con **tier `desktop` en su teléfono va «muy fluido sin problemas»**, y eso
+     incluye `zoomAtlas 18` y `pixelRatio` = devicePixelRatio (2,16), o sea
+     1201×1080 por ojo en estéreo. El presupuesto de §9.5 («≤250 k triángulos
+     y ≤60 draw calls por ojo» para teléfono) era MUY conservador: se midieron
+     111 draw calls y 235 k triángulos a 60 fps en ese mismo teléfono.
+   - **El tier `phone` con radio de matas de 100 m «es muy malo, lo descartaría
+     rotundamente»**, y con 250 m «se notan los cortes cuando el vuelo es alto».
+
+   Por eso `phone` sube a diales de grado escritorio. Los tiers quedan casi
+   iguales a propósito: en este contenido, ese teléfono rinde como el
+   escritorio. **La protección real de un dispositivo flojo ya no es el tier
+   sino la calidad adaptativa** (los escalones de más abajo), que sí se midió
+   funcionando en vivo. Si aparece un teléfono que no da, el escalón lo baja.
+
+   Memoria: el chip de ese teléfono tiene `MAX_TEXTURE_SIZE` 4096, así que los
+   atlas de 2048² entran, pero a z18 pueden ser hasta 6 (~134 MB). Si algún
+   dispositivo falla al cargar el satélite, el primer dial a bajar es
+   `zoomAtlas`, no el radio. */
 const TIERS = {
   phone: {
-    radioMatas: 100, radioArboles: 400, radioMax: 400,
-    pasto: { "corr-herb": { densidad: 1500, tope: 40000 }, "parche-herb": { densidad: 600, tope: 25000 } },
-    zoomAtlas: 17, pixelRatio: 1.0, trisObjetivo: 250000, fpsObjetivo: 60
+    radioMatas: 300, radioArboles: 1000, radioMax: 2400,
+    pasto: { "corr-herb": { densidad: 1500, tope: 180000 }, "parche-herb": { densidad: 800, tope: 120000 } },
+    zoomAtlas: 18, pixelRatio: null, trisObjetivo: 600000, fpsObjetivo: 60
   },
   quest: {
-    radioMatas: 140, radioArboles: 600, radioMax: 800,
-    pasto: { "corr-herb": { densidad: 1500, tope: 90000 }, "parche-herb": { densidad: 800, tope: 60000 } },
+    radioMatas: 250, radioArboles: 1000, radioMax: 2000,
+    pasto: { "corr-herb": { densidad: 1500, tope: 180000 }, "parche-herb": { densidad: 800, tope: 120000 } },
     zoomAtlas: 18, pixelRatio: null, trisObjetivo: 800000, fpsObjetivo: 72
   },
   desktop: {
-    radioMatas: 250, radioArboles: 1200, radioMax: 3000,
+    radioMatas: 320, radioArboles: 1200, radioMax: 3000,
     pasto: { "corr-herb": { densidad: 1500, tope: 180000 }, "parche-herb": { densidad: 800, tope: 120000 } },
     zoomAtlas: 18, pixelRatio: null, trisObjetivo: 3000000, fpsObjetivo: 60
   }

@@ -30,6 +30,32 @@ const BANDA_LOD = 25;        // m de histéresis del LOD
 const BANDA_RADIO = 15;      // m de histéresis del culling por radio
 const REVISAR_CADA = 200;    // ms
 
+/* Banda de raleo: en el tramo exterior del radio se dibuja sólo una fracción
+   de las instancias de cada celda, en vez de cortar seco.
+
+   Es el pulido que P3 dejó anotado («bajar la densidad en el último tercio del
+   radio en vez de cortar seco») y que el dueño pidió al probar en el teléfono
+   (2026-07-26): «se notan los cortes cuando el vuelo es alto».
+
+   El truco es que `InstancedMesh.count` se puede bajar y listo: las instancias
+   de cada celda están en orden de scatter (aleatorio), así que dibujar las
+   primeras N es quedarse con una muestra uniforme de la celda. Cuesta CERO:
+   no se recalcula ninguna matriz, no se toca la GPU, y baja los triángulos sin
+   cambiar los draw calls.
+
+   El raleo es CONTINUO, no un escalón: un solo umbral se ve como una línea de
+   cambio de densidad, que es el mismo problema que se venía a resolver. El
+   factor baja suave entre RALEO_DESDE·R y R, y se cuantiza al 10 % para no
+   reasignar `count` por nada.
+
+   Y hay un segundo factor, por altura: cuando el radio se abre en vuelo alto,
+   la densidad plena en todo ese disco son millones de triángulos (medido en
+   P3: 4,8 M desde el aire). A esa altura una mata ocupa menos de un píxel, así
+   que se ralea todo el disco en proporción a cuánto se abrió el radio. */
+const RALEO_DESDE = 0.55;    // fracción del radio donde empieza el raleo
+const RALEO_MIN = 0.35;      // fracción de instancias en el borde del radio
+const RALEO_ALT_EXP = 0.6;   // cuánto ralea la apertura del radio por altura
+
 const Chunks = {
   /* Una entrada por celda: { cx, cz, tipo, meshes[], hi, lo, visible, cerca } */
   celdas: { inicial: [], multi: [] },
@@ -69,8 +95,14 @@ const Chunks = {
 
   /* tipo: "pasto" | "arbol". `lo` es opcional (sólo copas). */
   registrar(key, { cx, cz, tipo, meshes, hi, lo }) {
-    for (const m of meshes) m.frustumCulled = true;
-    this.celdas[key].push({ cx, cz, tipo, meshes, hi: hi || null, lo: lo || null, visible: true, cerca: true });
+    for (const m of meshes) {
+      m.frustumCulled = true;
+      m.userData.nFull = m.count;      // para poder ralear bajando `count`
+    }
+    this.celdas[key].push({
+      cx, cz, tipo, meshes, hi: hi || null, lo: lo || null,
+      visible: true, cerca: true, raleo: 1
+    });
   },
 
   /* El radio se ABRE con la altura.
@@ -81,8 +113,9 @@ const Chunks = {
      — que es justo el activo visual del proyecto. Visto en la primera
      medición en vivo: a 900 m de altura, cero celdas visibles.
 
-     La regla es `3 × altura`, así que a altura de dron (12–35 m) NO cambia
-     nada: 3×18 = 54 m es menos que el radio nominal de cualquier tier, y el
+     La regla es `4 × altura` (era 3 hasta que el dueño probó el vuelo alto en
+     el teléfono, 2026-07-26), así que a altura de dron (12–35 m) NO cambia
+     nada: 4×18 = 72 m es menos que el radio nominal de cualquier tier, y el
      presupuesto medido a esa altura sigue valiendo tal cual. Sólo se abre
      cuando se sube, y siempre con el tope `radioMax` del tier.
 
@@ -92,7 +125,7 @@ const Chunks = {
      hasta el piso SIN NINGÚN EFECTO. Bug visto en vivo: escalón 3 con el
      radio efectivo intacto en 2695 m. */
   radioEfectivo(base, altura) {
-    return Math.min(Perf.dial.radioMax, Math.max(base, altura * 3)) * Perf.factorEscalon();
+    return Math.min(Perf.dial.radioMax, Math.max(base, altura * 4)) * Perf.factorEscalon();
   },
   radioEfectivoMatas() { return this._rPasto || Perf.radioMatas(); },
 
@@ -107,6 +140,11 @@ const Chunks = {
     const rPasto = this.radioEfectivo(Perf.dial.radioMatas, alt);
     const rArbol = this.radioEfectivo(Perf.dial.radioArboles, alt);
     this._rPasto = rPasto;
+    // Cuánto se abrió el radio respecto del nominal del tier: es la medida de
+    // cuánta área extra hay que dibujar, y de cuánto se puede ralear sin que
+    // se note (a esa altura una mata mide menos de un píxel).
+    const escalaAltura = Math.min(1, Math.pow(Perf.dial.radioMatas / Math.max(rPasto, 1), RALEO_ALT_EXP));
+    this._escalaAltura = escalaAltura;
 
     for (const key of ["inicial", "multi"]) {
       for (const c of this.celdas[key]) {
@@ -117,12 +155,29 @@ const Chunks = {
         const dentro = c.visible ? d < R + BANDA_RADIO : d < R - BANDA_RADIO;
         const cerca = !c.hi ? true
           : (c.cerca ? d < LOD_UMBRAL + BANDA_LOD : d < LOD_UMBRAL - BANDA_LOD);
+        // Raleo sólo en el pasto: los árboles son ~100× menos numerosos y son
+        // justamente lo que da profundidad, así que no se tocan.
+        let raleo = 1;
+        if (c.tipo === "pasto" && dentro) {
+          const t = (d / R - RALEO_DESDE) / (1 - RALEO_DESDE);
+          if (t > 0) raleo = 1 - (1 - RALEO_MIN) * Math.min(1, t);
+          raleo *= escalaAltura;
+          raleo = Math.max(0.05, Math.round(raleo * 10) / 10);
+        }
+
         if (dentro !== c.visible || cerca !== c.cerca) {
           c.visible = dentro; c.cerca = cerca;
           for (const m of c.meshes) m.visible = dentro;
           // el LOD se reaplica SIEMPRE que se toca la visibilidad: si no, al
           // volver a entrar en radio se encienden las dos copas a la vez
           if (c.hi) { c.hi.visible = dentro && cerca; if (c.lo) c.lo.visible = dentro && !cerca; }
+        }
+        if (raleo !== c.raleo) {
+          c.raleo = raleo;
+          for (const m of c.meshes) {
+            const n = m.userData.nFull || m.count;
+            m.count = raleo >= 1 ? n : Math.max(1, Math.round(n * raleo));
+          }
         }
       }
     }
