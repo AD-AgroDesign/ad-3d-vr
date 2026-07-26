@@ -1,0 +1,572 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <title>Perfil del visor (QR) · AgroDesign VR</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <link rel="icon" type="image/png" href="img/logo.png">
+  <!-- ============================================================
+       perfil-visor.html — Genera el QR del PERFIL DEL VISOR que pide Chrome
+       al entrar en WebXR (P7).
+
+       Por qué existe: en modo WebXR la óptica NO la pone el `?sep=` de la app.
+       La pone el perfil del visor, que el runtime de Cardboard carga
+       escaneando un QR. Sin escanear nada usa su perfil por defecto
+       (Cardboard v1: lentes a 60 mm, pantalla a 42 mm, 40° de campo visual),
+       y en el visor genérico del dueño eso deja **negra la periferia**: cada
+       ojo usa ~55 % de su mitad de pantalla (medido sobre su captura del
+       2026-07-26). Con las medidas reales del visor, ese negro se convierte
+       en imagen.
+
+       Cómo se usa: se abre esta página EN LA COMPUTADORA, se cargan las
+       medidas y se escanea el QR con el teléfono cuando Chrome lo pida al
+       entrar en immersive-vr. El perfil queda recordado en el teléfono.
+
+       El QR contiene una URI `http://google.com/cardboard/cfg?p=<datos>`,
+       donde los datos son el mensaje protobuf `DeviceParams` del SDK de
+       Cardboard en base64url. Acá está todo hecho a mano y sin dependencias
+       (§2, reglas 3 y 4): el serializador de protobuf y el codificador de QR
+       son las dos piezas de abajo.
+       ============================================================ -->
+  <style>
+    :root { --ink: #e8efe0; --muted: #a8c0ab; --ok: #8bc34a; --bad: #e57373; --gold: #e8d9a0; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 16px 16px 40px; background: #0d1a10; color: var(--ink);
+      font: 15px/1.55 -apple-system, Segoe UI, Roboto, system-ui, sans-serif;
+    }
+    .col { max-width: 900px; margin: 0 auto; }
+    h1 { font-size: 21px; margin: 0 0 4px; }
+    h1 span { color: var(--gold); }
+    p.sub { color: var(--muted); margin: 0 0 16px; font-size: 14px; }
+    section { background: rgba(255,255,255,.04); border-radius: 10px; padding: 12px 14px; margin-bottom: 12px; }
+    h2 { font-size: 15px; margin: 0 0 8px; color: var(--gold); }
+    ol, ul { margin: 6px 0; padding-left: 20px; }
+    li { margin: 3px 0; }
+    label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 3px; }
+    .campos { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+    input[type=text], input[type=number] {
+      width: 100%; font: 15px/1.2 ui-monospace, monospace; color: var(--ink);
+      background: #101d13; border: 1px solid #2c4d34; border-radius: 8px; padding: 9px 10px;
+    }
+    input:focus { outline: none; border-color: #6c9c78; }
+    .botones { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+    button {
+      font: 600 14px/1 inherit; color: var(--ink); background: #1e3626;
+      border: 1px solid #3d6b47; border-radius: 999px; padding: 11px 16px; cursor: pointer;
+    }
+    button:active { background: #3d6b47; }
+    button.sec { background: transparent; color: var(--muted); }
+    #qrCaja { display: flex; flex-wrap: wrap; gap: 18px; align-items: flex-start; }
+    /* Sin escalar por CSS: si el canvas se muestra a un tamaño distinto del
+       real, los módulos quedan de ancho desparejo y al lector le cuesta. */
+    #qr { background: #fff; border-radius: 8px; padding: 12px; image-rendering: pixelated; max-width: 100%; }
+    #uri {
+      flex: 1 1 260px; font: 12px/1.5 ui-monospace, monospace; color: var(--muted);
+      word-break: break-all; background: #101d13; border-radius: 8px; padding: 10px;
+    }
+    .aviso { color: var(--gold); font-size: 13px; }
+    .malo { color: var(--bad); }
+    .nota { color: var(--muted); font-size: 13px; }
+    svg.diagrama { width: 100%; max-width: 420px; height: auto; display: block; margin: 8px 0; }
+    .diagrama text { font: 11px sans-serif; fill: #a8c0ab; }
+  </style>
+</head>
+<body>
+<div class="col">
+  <h1>Perfil del visor · <span>QR para WebXR</span></h1>
+  <p class="sub">
+    En WebXR la geometría de las lentes la pone el <b>perfil del visor</b>, no la app. Sin QR,
+    Chrome usa su perfil por defecto (Cardboard v1) y en un visor genérico eso deja negra la
+    periferia y cuesta enfocar. Acá se arma el QR con las medidas de tu visor.
+  </p>
+
+  <section>
+    <h2>Cómo se usa</h2>
+    <ol>
+      <li>Abrí <b>esta página en la computadora</b> (el QR hay que mirarlo desde el teléfono).</li>
+      <li>Cargá las medidas de tu visor, abajo. El QR se actualiza solo.</li>
+      <li>En el teléfono, entrá en <b>Probar WebXR</b>. Cuando Chrome ofrezca escanear el QR,
+        apuntá a la pantalla de la computadora.</li>
+      <li>Queda recordado en el teléfono. Para volver atrás, escaneá el preset
+        <b>Cardboard v1</b>, que es el default de Chrome.</li>
+    </ol>
+    <p class="nota">
+      Si querés comprobar el QR antes, leelo con cualquier lector de códigos: tiene que mostrar
+      una dirección que empieza con <code>http://google.com/cardboard/cfg?p=</code>.
+      <b>Si el teléfono no lo engancha</b>, cambiá una letra del <i>modelo</i> y probá de nuevo:
+      el dibujo del QR cambia entero y algunos patrones se leen mejor que otros.
+    </p>
+  </section>
+
+  <section>
+    <h2>Cómo se miden las tres distancias</h2>
+    <svg class="diagrama" viewBox="0 0 420 190" xmlns="http://www.w3.org/2000/svg">
+      <!-- corte lateral del visor: pantalla, lente, ojo -->
+      <rect x="30" y="20" width="8" height="140" fill="#3d6b47"/>
+      <text x="18" y="176">pantalla</text>
+      <ellipse cx="120" cy="70" rx="9" ry="26" fill="#6c9c78"/>
+      <text x="100" y="30">lente</text>
+      <circle cx="180" cy="70" r="10" fill="none" stroke="#a8c0ab"/>
+      <text x="168" y="46">ojo</text>
+      <line x1="38" y1="70" x2="111" y2="70" stroke="#e8d9a0" stroke-width="1.5"/>
+      <text x="42" y="64">pantalla → lente</text>
+      <line x1="34" y1="160" x2="34" y2="96" stroke="#e8d9a0" stroke-width="1.5"/>
+      <line x1="34" y1="96" x2="111" y2="96" stroke="#e8d9a0" stroke-width="1.5" stroke-dasharray="3 3"/>
+      <text x="44" y="112">bandeja → lente</text>
+      <text x="20" y="14">— corte lateral —</text>
+      <!-- vista de frente: dos lentes -->
+      <ellipse cx="300" cy="80" rx="24" ry="24" fill="none" stroke="#6c9c78" stroke-width="2"/>
+      <ellipse cx="370" cy="80" rx="24" ry="24" fill="none" stroke="#6c9c78" stroke-width="2"/>
+      <line x1="300" y1="80" x2="370" y2="80" stroke="#e8d9a0" stroke-width="1.5"/>
+      <circle cx="300" cy="80" r="2" fill="#e8d9a0"/><circle cx="370" cy="80" r="2" fill="#e8d9a0"/>
+      <text x="288" y="126">entre centros de lentes</text>
+      <text x="286" y="14">— de frente —</text>
+    </svg>
+    <ul>
+      <li><b>Entre lentes:</b> de centro a centro de las dos lentes. Si el visor tiene ruedita de
+        separación, <b>dejala como la vas a usar</b> y medí así. Típico: 60–65 mm.</li>
+      <li><b>Pantalla → lente:</b> del plano donde apoya la pantalla del teléfono hasta la
+        superficie de la lente. Típico: 39–50 mm.</li>
+      <li><b>Bandeja → lente:</b> del borde donde apoya el <b>lado largo inferior</b> del teléfono
+        hasta el eje de las lentes. Típico: 35–40 mm. Es lo que centra la imagen en vertical.</li>
+    </ul>
+    <p class="nota">
+      Con una regla común alcanza: 2 mm de error no se notan. Los dos parámetros que
+      <b>no se miden</b> son el campo visual y la distorsión: mirá la nota de más abajo.
+    </p>
+  </section>
+
+  <section>
+    <h2>Medidas del visor</h2>
+    <div class="botones" id="presets"></div>
+    <div class="campos" style="margin-top:12px">
+      <div><label>Marca</label><input type="text" id="vendor" value="Generico"></div>
+      <div><label>Modelo</label><input type="text" id="modelo" value="Visor de Mike"></div>
+      <div><label>Entre lentes (mm)</label><input type="number" id="entreLentes" value="63" step="0.5"></div>
+      <div><label>Pantalla → lente (mm)</label><input type="number" id="pantallaLente" value="42" step="0.5"></div>
+      <div><label>Bandeja → lente (mm)</label><input type="number" id="bandejaLente" value="37" step="0.5"></div>
+    </div>
+    <div class="campos" style="margin-top:12px">
+      <div><label>Campo visual exterior (°)</label><input type="number" id="fov0" value="50" step="1"></div>
+      <div><label>interior (°)</label><input type="number" id="fov1" value="50" step="1"></div>
+      <div><label>arriba (°)</label><input type="number" id="fov2" value="50" step="1"></div>
+      <div><label>abajo (°)</label><input type="number" id="fov3" value="50" step="1"></div>
+      <div><label>Distorsión k1</label><input type="number" id="k1" value="0.441" step="0.001"></div>
+      <div><label>Distorsión k2</label><input type="number" id="k2" value="0.156" step="0.001"></div>
+    </div>
+    <p class="nota" style="margin-top:10px">
+      <b>El campo visual es el dial que agranda la imagen.</b> Es el ángulo que el perfil dice que
+      la lente deja ver, y es lo que decide cuánta pantalla se usa: el default de Chrome son 40° y
+      por eso queda tanto negro. Subilo de a 5° (50 → 55 → 60) hasta que el negro casi desaparezca;
+      si empiezan a verse los bordes de la lente o las rectas se curvan feo, bajá uno.
+      <b>La distorsión (k1, k2) no se mide</b>: dejá la de Cardboard v1 y tocala sólo si las líneas
+      rectas se ven curvadas — más k1 curva más.
+    </p>
+  </section>
+
+  <section>
+    <h2>El QR</h2>
+    <div id="qrCaja">
+      <canvas id="qr" width="320" height="320"></canvas>
+      <div>
+        <div id="uri"></div>
+        <div class="botones">
+          <button id="btn-png">Descargar PNG</button>
+          <button id="btn-copiar" class="sec">Copiar la dirección</button>
+          <button id="btn-imprimir" class="sec">Imprimir</button>
+        </div>
+        <p class="nota" id="detalle"></p>
+      </div>
+    </div>
+    <p class="aviso" id="error"></p>
+  </section>
+</div>
+
+<script>
+"use strict";
+
+/* ============================================================
+   1. DeviceParams → protobuf
+   El mensaje del SDK de Cardboard. Las distancias van en METROS y los
+   ángulos en grados. Los campos opcionales que no escribimos
+   (has_magnet, vertical_alignment, botón primario) quedan en su default,
+   que es justo lo que queremos: alineación por la bandeja, sin imán.
+   ============================================================ */
+function f32(v) {
+  const b = new Uint8Array(4);
+  new DataView(b.buffer).setFloat32(0, v, true);   // protobuf: little endian
+  return b;
+}
+function varint(n) {
+  const r = [];
+  do { let b = n & 0x7f; n >>>= 7; if (n) b |= 0x80; r.push(b); } while (n);
+  return r;
+}
+function deviceParams(p) {
+  const out = [];
+  const bytes = a => { for (const b of a) out.push(b); };
+  const cadena = (tag, s) => {
+    const b = new TextEncoder().encode(s);
+    out.push(tag << 3 | 2); bytes(varint(b.length)); bytes(b);
+  };
+  const flotante = (tag, v) => { out.push(tag << 3 | 5); bytes(f32(v)); };
+  const flotantes = (tag, arr) => {
+    out.push(tag << 3 | 2); bytes(varint(arr.length * 4));
+    for (const v of arr) bytes(f32(v));
+  };
+  cadena(1, p.vendor);
+  cadena(2, p.modelo);
+  flotante(3, p.pantallaLente);        // screen_to_lens_distance (m)
+  flotante(4, p.entreLentes);          // inter_lens_distance (m)
+  flotantes(5, p.fov);                 // left_eye_field_of_view_angles (°)
+  flotante(6, p.bandejaLente);         // tray_to_lens_distance (m)
+  flotantes(7, p.k);                   // distortion_coefficients
+  return new Uint8Array(out);
+}
+function base64url(bytes) {
+  let s = "";
+  for (const b of bytes) s += String.fromCharCode(b);
+  return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+/* ============================================================
+   2. Codificador de QR — modo byte, corrección L, versiones 1 a 9.
+
+   Escrito a mano porque el proyecto no usa CDNs ni build (§2). El alcance
+   está acotado a propósito: la URI del perfil ronda los 150 caracteres y
+   una versión 9 entra 232, así que no hacen falta las versiones altas,
+   que son las que traen los bloques de tamaño mixto.
+
+   La información de formato y de versión se CALCULA con su BCH en vez de
+   copiarla de una tabla: una tabla mal transcrita es un QR que no scanea y
+   no hay forma de darse cuenta mirándolo.
+   ============================================================ */
+const QR = (function () {
+  const EXP = new Uint8Array(512), LOG = new Uint8Array(256);
+  (function () {
+    let x = 1;
+    for (let i = 0; i < 255; i++) { EXP[i] = x; LOG[x] = i; x <<= 1; if (x & 256) x ^= 0x11d; }
+    for (let i = 255; i < 512; i++) EXP[i] = EXP[i - 255];
+  })();
+  const mul = (a, b) => (a === 0 || b === 0) ? 0 : EXP[LOG[a] + LOG[b]];
+
+  /* polinomio generador de Reed-Solomon de grado n */
+  function generador(n) {
+    let g = [1];
+    for (let i = 0; i < n; i++) {
+      const ng = new Array(g.length + 1).fill(0);
+      for (let j = 0; j < g.length; j++) { ng[j] ^= g[j]; ng[j + 1] ^= mul(g[j], EXP[i]); }
+      g = ng;
+    }
+    return g;
+  }
+  function correccion(datos, n) {
+    const g = generador(n), r = new Uint8Array(datos.length + n);
+    r.set(datos);
+    for (let i = 0; i < datos.length; i++) {
+      const c = r[i];
+      if (!c) continue;
+      for (let j = 1; j < g.length; j++) r[i + j] ^= mul(g[j], c);
+    }
+    return r.slice(datos.length);
+  }
+
+  /* Versiones con corrección L: bloques, datos por bloque, correctores por
+     bloque, y centros de los patrones de alineación. */
+  const VER = [null,
+    { nb: 1, d: 19,  ec: 7,  al: [] },
+    { nb: 1, d: 34,  ec: 10, al: [6, 18] },
+    { nb: 1, d: 55,  ec: 15, al: [6, 22] },
+    { nb: 1, d: 80,  ec: 20, al: [6, 26] },
+    { nb: 1, d: 108, ec: 26, al: [6, 30] },
+    { nb: 2, d: 68,  ec: 18, al: [6, 34] },
+    { nb: 2, d: 78,  ec: 20, al: [6, 22, 38] },
+    { nb: 2, d: 97,  ec: 24, al: [6, 24, 42] },
+    { nb: 2, d: 116, ec: 30, al: [6, 26, 46] }
+  ];
+
+  function bitsFormato(mask) {
+    const d = (1 << 3) | mask;               // 01 = corrección L
+    let v = d << 10;
+    for (let i = 4; i >= 0; i--) if (v & (1 << (i + 10))) v ^= 0x537 << i;
+    return ((d << 10) | v) ^ 0x5412;
+  }
+  function bitsVersion(ver) {
+    let v = ver << 12;
+    for (let i = 5; i >= 0; i--) if (v & (1 << (i + 12))) v ^= 0x1f25 << i;
+    return (ver << 12) | v;
+  }
+
+  const MASCARAS = [
+    (y, x) => (y + x) % 2 === 0,
+    (y, x) => y % 2 === 0,
+    (y, x) => x % 3 === 0,
+    (y, x) => (y + x) % 3 === 0,
+    (y, x) => (Math.floor(y / 2) + Math.floor(x / 3)) % 2 === 0,
+    (y, x) => (y * x) % 2 + (y * x) % 3 === 0,
+    (y, x) => ((y * x) % 2 + (y * x) % 3) % 2 === 0,
+    (y, x) => ((y + x) % 2 + (y * x) % 3) % 2 === 0
+  ];
+
+  /* Penalizaciones del estándar. Elegir bien la máscara no cambia si el QR
+     es válido, pero sí cuánto le cuesta al lector engancharlo. */
+  function penalizacion(m, n) {
+    let p = 0;
+    const corridas = linea => {
+      let run = 1;
+      for (let i = 1; i < n; i++) {
+        if (linea[i] === linea[i - 1]) { run++; if (run === 5) p += 3; else if (run > 5) p += 1; }
+        else run = 1;
+      }
+    };
+    for (let y = 0; y < n; y++) corridas(m[y]);
+    for (let x = 0; x < n; x++) corridas(m.map(f => f[x]));
+    for (let y = 0; y < n - 1; y++) for (let x = 0; x < n - 1; x++)
+      if (m[y][x] === m[y][x + 1] && m[y][x] === m[y + 1][x] && m[y][x] === m[y + 1][x + 1]) p += 3;
+    const pat1 = [1, 0, 1, 1, 1, 0, 1, 0, 0, 0, 0], pat2 = [0, 0, 0, 0, 1, 0, 1, 1, 1, 0, 1];
+    const buscar = linea => {
+      for (let i = 0; i + 11 <= n; i++) {
+        let a = true, b = true;
+        for (let j = 0; j < 11; j++) { if (linea[i + j] !== pat1[j]) a = false; if (linea[i + j] !== pat2[j]) b = false; }
+        if (a) p += 40;
+        if (b) p += 40;
+      }
+    };
+    for (let y = 0; y < n; y++) buscar(m[y]);
+    for (let x = 0; x < n; x++) buscar(m.map(f => f[x]));
+    let oscuros = 0;
+    for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) oscuros += m[y][x];
+    const pct = oscuros * 100 / (n * n);
+    p += Math.floor(Math.abs(pct - 50) / 5) * 10;
+    return p;
+  }
+
+  function generar(texto) {
+    const datos = new TextEncoder().encode(texto);
+    let ver = 0, c = null;
+    for (let v = 1; v <= 9; v++) {
+      const cand = VER[v];
+      if (4 + 8 + datos.length * 8 <= cand.nb * cand.d * 8) { ver = v; c = cand; break; }
+    }
+    if (!ver) throw new Error("el texto no entra en un QR de versión 9; acortá la marca y el modelo");
+
+    /* --- bits de datos --- */
+    const bits = [];
+    const put = (val, len) => { for (let i = len - 1; i >= 0; i--) bits.push((val >> i) & 1); };
+    put(4, 4);                       // modo byte
+    put(datos.length, 8);            // contador (8 bits hasta la versión 9)
+    for (const b of datos) put(b, 8);
+    const capacidad = c.nb * c.d;
+    for (let i = 0; i < 4 && bits.length < capacidad * 8; i++) bits.push(0);
+    while (bits.length % 8) bits.push(0);
+    const cw = [];
+    for (let i = 0; i < bits.length; i += 8) {
+      let b = 0;
+      for (let j = 0; j < 8; j++) b = (b << 1) | bits[i + j];
+      cw.push(b);
+    }
+    const relleno = [0xec, 0x11];
+    for (let i = 0; cw.length < capacidad; i++) cw.push(relleno[i % 2]);
+
+    /* --- bloques, corrección e intercalado --- */
+    const bloques = [], correctores = [];
+    for (let i = 0; i < c.nb; i++) {
+      const b = Uint8Array.from(cw.slice(i * c.d, (i + 1) * c.d));
+      bloques.push(b); correctores.push(correccion(b, c.ec));
+    }
+    const final = [];
+    for (let i = 0; i < c.d; i++) for (const b of bloques) final.push(b[i]);
+    for (let i = 0; i < c.ec; i++) for (const e of correctores) final.push(e[i]);
+
+    /* --- patrones fijos --- */
+    const n = 17 + 4 * ver;
+    const m = Array.from({ length: n }, () => new Int8Array(n).fill(-1));
+    const buscador = (cx, cy) => {
+      for (let dy = -1; dy <= 7; dy++) for (let dx = -1; dx <= 7; dx++) {
+        const x = cx + dx, y = cy + dy;
+        if (x < 0 || y < 0 || x >= n || y >= n) continue;
+        const on = (dx >= 0 && dx <= 6 && (dy === 0 || dy === 6)) ||
+                   (dy >= 0 && dy <= 6 && (dx === 0 || dx === 6)) ||
+                   (dx >= 2 && dx <= 4 && dy >= 2 && dy <= 4);
+        m[y][x] = on ? 1 : 0;
+      }
+    };
+    buscador(0, 0); buscador(n - 7, 0); buscador(0, n - 7);
+    for (let i = 8; i < n - 8; i++) { m[6][i] = (i % 2 === 0) ? 1 : 0; m[i][6] = (i % 2 === 0) ? 1 : 0; }
+    for (const ay of c.al) for (const ax of c.al) {
+      if ((ax <= 8 && ay <= 8) || (ax <= 8 && ay >= n - 9) || (ax >= n - 9 && ay <= 8)) continue;
+      for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++)
+        m[ay + dy][ax + dx] = (Math.max(Math.abs(dx), Math.abs(dy)) !== 1) ? 1 : 0;
+    }
+    const reservar = (x, y) => { if (m[y][x] === -1) m[y][x] = 0; };
+    for (let i = 0; i < 9; i++) { reservar(i, 8); reservar(8, i); }
+    for (let i = 0; i < 8; i++) { reservar(n - 1 - i, 8); reservar(8, n - 1 - i); }
+    // el módulo siempre oscuro y los bits de formato se escriben al final,
+    // después de elegir la máscara: ver el comentario del enmascarado
+    if (ver >= 7) {
+      const vb = bitsVersion(ver);
+      for (let i = 0; i < 18; i++) {
+        const b = (vb >> i) & 1, r = Math.floor(i / 3), cc = n - 11 + (i % 3);
+        m[r][cc] = b; m[cc][r] = b;
+      }
+    }
+    // lo que ya está escrito es patrón fijo: el enmascarado no lo toca
+    const fijo = m.map(f => Array.from(f, v => v !== -1));
+
+    /* --- datos en zigzag, de derecha a izquierda --- */
+    let idx = 0, arriba = true;
+    for (let x = n - 1; x >= 1; x -= 2) {
+      if (x === 6) x = 5;                              // la columna 6 es de temporización
+      for (let k = 0; k < n; k++) {
+        const y = arriba ? n - 1 - k : k;
+        for (let dx = 0; dx < 2; dx++) {
+          const xx = x - dx;
+          if (m[y][xx] !== -1) continue;
+          let b = 0;
+          if (idx < final.length * 8) b = (final[idx >> 3] >> (7 - (idx & 7))) & 1;
+          idx++;
+          m[y][xx] = b;
+        }
+      }
+      arriba = !arriba;
+    }
+
+    /* --- máscara: se prueban las ocho y gana la de menor penalización ---
+
+       Las ocho se evalúan con la franja de formato APAGADA, y recién después
+       se escriben los bits de la ganadora. Parece un detalle y no lo es:
+       evaluando con los bits de formato ya puestos, la elección cambia, y en
+       la prueba con los datos de un visor real la máscara que ganaba así
+       (la 3) resultó un QR válido que el lector NO llegaba a enganchar.
+       Evaluándolas apagadas se elige la misma que las implementaciones de
+       referencia, y ahí sí lee. */
+    const enmascarar = mask => {
+      const mm = m.map(f => Array.from(f));
+      for (let y = 0; y < n; y++) for (let x = 0; x < n; x++)
+        if (!fijo[y][x] && MASCARAS[mask](y, x)) mm[y][x] ^= 1;
+      return mm;
+    };
+    let mejorMask = 0, mejorP = Infinity;
+    for (let mask = 0; mask < 8; mask++) {
+      const p = penalizacion(enmascarar(mask), n);
+      if (p < mejorP) { mejorP = p; mejorMask = mask; }
+    }
+
+    const mejor = enmascarar(mejorMask);
+    const fb = bitsFormato(mejorMask);
+    for (let i = 0; i < 15; i++) {
+      const b = (fb >> i) & 1;
+      if (i < 6) mejor[i][8] = b; else if (i < 8) mejor[i + 1][8] = b; else mejor[n - 15 + i][8] = b;
+      if (i < 8) mejor[8][n - 1 - i] = b; else if (i < 9) mejor[8][15 - i] = b; else mejor[8][14 - i] = b;
+    }
+    mejor[n - 8][8] = 1;                              // módulo siempre oscuro
+    return { modulos: mejor, n, version: ver, mascara: mejorMask, bytes: datos.length };
+  }
+
+  return { generar };
+})();
+
+/* ============================================================
+   3. La página
+   ============================================================ */
+const PRESETS = {
+  "Cardboard v1 (el default de Chrome)": {
+    vendor: "Google, Inc.", modelo: "Cardboard v1",
+    entreLentes: 60, pantallaLente: 42, bandejaLente: 35, fov: [40, 40, 40, 40], k: [0.441, 0.156]
+  },
+  "Cardboard v2": {
+    vendor: "Google, Inc.", modelo: "Cardboard v2",
+    entreLentes: 64, pantallaLente: 39.3, bandejaLente: 35, fov: [60, 60, 60, 60], k: [0.34, 0.55]
+  },
+  "Genérico de plástico (punto de partida)": {
+    vendor: "Generico", modelo: "Visor de Mike",
+    entreLentes: 63, pantallaLente: 42, bandejaLente: 37, fov: [50, 50, 50, 50], k: [0.441, 0.156]
+  }
+};
+
+const $ = id => document.getElementById(id);
+const CAMPOS = ["vendor", "modelo", "entreLentes", "pantallaLente", "bandejaLente",
+                "fov0", "fov1", "fov2", "fov3", "k1", "k2"];
+
+function leer() {
+  return {
+    vendor: $("vendor").value.trim() || "Generico",
+    modelo: $("modelo").value.trim() || "Visor",
+    // el protobuf va en METROS; los campos están en milímetros porque es lo
+    // que dice la regla
+    entreLentes: +$("entreLentes").value / 1000,
+    pantallaLente: +$("pantallaLente").value / 1000,
+    bandejaLente: +$("bandejaLente").value / 1000,
+    fov: [+$("fov0").value, +$("fov1").value, +$("fov2").value, +$("fov3").value],
+    k: [+$("k1").value, +$("k2").value]
+  };
+}
+
+function pintar(qr, escala) {
+  const cv = $("qr"), borde = 4;                 // zona tranquila obligatoria
+  const lado = (qr.n + borde * 2) * escala;
+  cv.width = cv.height = lado;
+  const g = cv.getContext("2d");
+  g.fillStyle = "#fff"; g.fillRect(0, 0, lado, lado);
+  g.fillStyle = "#000";
+  for (let y = 0; y < qr.n; y++) for (let x = 0; x < qr.n; x++)
+    if (qr.modulos[y][x]) g.fillRect((x + borde) * escala, (y + borde) * escala, escala, escala);
+}
+
+let URI_ACTUAL = "";
+
+function actualizar() {
+  const err = $("error");
+  try {
+    const p = leer();
+    const uri = "http://google.com/cardboard/cfg?p=" + base64url(deviceParams(p));
+    URI_ACTUAL = uri;
+    const qr = QR.generar(uri);
+    pintar(qr, 8);
+    $("uri").textContent = uri;
+    $("detalle").textContent =
+      `QR versión ${qr.version} · máscara ${qr.mascara} · ${qr.bytes} caracteres · ` +
+      `lentes a ${(p.entreLentes * 1000).toFixed(1)} mm · pantalla a ${(p.pantallaLente * 1000).toFixed(1)} mm · ` +
+      `campo ${p.fov.join("/")}°`;
+    err.textContent = "";
+  } catch (e) {
+    err.textContent = "No se pudo generar el QR: " + ((e && e.message) || e);
+    err.className = "aviso malo";
+  }
+}
+
+function aplicarPreset(nombre) {
+  const p = PRESETS[nombre];
+  $("vendor").value = p.vendor; $("modelo").value = p.modelo;
+  $("entreLentes").value = p.entreLentes;
+  $("pantallaLente").value = p.pantallaLente;
+  $("bandejaLente").value = p.bandejaLente;
+  for (let i = 0; i < 4; i++) $("fov" + i).value = p.fov[i];
+  $("k1").value = p.k[0]; $("k2").value = p.k[1];
+  actualizar();
+}
+
+for (const nombre of Object.keys(PRESETS)) {
+  const b = document.createElement("button");
+  b.className = "sec"; b.textContent = nombre;
+  b.addEventListener("click", () => aplicarPreset(nombre));
+  $("presets").appendChild(b);
+}
+for (const id of CAMPOS) $(id).addEventListener("input", actualizar);
+
+$("btn-png").addEventListener("click", () => {
+  const a = document.createElement("a");
+  a.download = "perfil-visor-" + ($("modelo").value.trim().replace(/\W+/g, "-") || "visor") + ".png";
+  a.href = $("qr").toDataURL("image/png");
+  a.click();
+});
+$("btn-copiar").addEventListener("click", () => navigator.clipboard.writeText(URI_ACTUAL));
+$("btn-imprimir").addEventListener("click", () => print());
+
+actualizar();
+// para poder verificar el codificador desde afuera sin tocar la página
+window.__perfil = { QR, deviceParams, base64url, leer, uri: () => URI_ACTUAL };
+</script>
+</body>
+</html>
