@@ -41,6 +41,11 @@
    probaron OK en el teléfono del dueño (volcado de diag.html, 2026-07-26). */
 const XR_REFS = ["local-floor", "local", "viewer"];
 
+/* Cuánto dura el "arranque" de la sesión a efectos de la medición: el
+   framebuffer del runtime y la recompilación de shaders producen un tirón que
+   no dice nada del rendimiento real (ver el comentario de _medir). */
+const ARRANQUE_MS = 3000;
+
 const DisplayWebXR = {
   label: "webxr",
   renderer: null, scene: null, rig: null,
@@ -200,6 +205,7 @@ const DisplayWebXR = {
     this._medidas = {
       inicio: performance.now(), fin: 0, frames: 0,
       fpsSuma: 0, fpsN: 0, fpsMin: Infinity, p95Max: 0,
+      fpsMinReg: Infinity, p95MaxReg: 0,
       tris: 0, calls: 0, framebuffer: null, viewport: null,
       ipd: null, fovY: null, aspectOjo: null,
       mandos: {}, motivo: "",
@@ -311,11 +317,19 @@ const DisplayWebXR = {
     if (now - this._muestreo < 500) return;
     this._muestreo = now;
 
+    /* El arranque de la sesión tiene un tirón inevitable y grande: el runtime
+       crea su framebuffer y three recompila los shaders contra el nuevo render
+       target. En la prueba real eso dejó `p95 peor 219 ms` y `mínimo 33,8 fps`
+       en una sesión que corrió a 72,5 fps parejos, o sea un número que asusta
+       y no describe nada. Se miden las dos cosas: con arranque y en régimen. */
+    const enRegimen = now - m.inicio > ARRANQUE_MS;
     if (Perf.fps > 0) {
       m.fpsSuma += Perf.fps; m.fpsN++;
       if (Perf.fps < m.fpsMin) m.fpsMin = Perf.fps;
+      if (enRegimen && Perf.fps < m.fpsMinReg) m.fpsMinReg = Perf.fps;
     }
     if (Perf.p95 > m.p95Max) m.p95Max = Perf.p95;
+    if (enRegimen && Perf.p95 > m.p95MaxReg) m.p95MaxReg = Perf.p95;
     const r = this.renderer.info.render;
     m.tris = r.triangles; m.calls = r.calls;
 
@@ -419,7 +433,9 @@ const DisplayWebXR = {
       fpsMedidoPorFrames: seg > 0 ? +(m.frames / seg).toFixed(1) : 0,
       fpsPromedioHUD: m.fpsN ? +(m.fpsSuma / m.fpsN).toFixed(1) : 0,
       fpsMinimo: m.fpsMin === Infinity ? 0 : +m.fpsMin.toFixed(1),
+      fpsMinimoEnRegimen: m.fpsMinReg === Infinity ? null : +m.fpsMinReg.toFixed(1),
       p95PeorMs: +m.p95Max.toFixed(1),
+      p95PeorEnRegimenMs: m.p95MaxReg ? +m.p95MaxReg.toFixed(1) : null,
       triangulosPorOjo: m.tris, drawCallsPorOjo: m.calls,
       framebuffer: m.framebuffer,
       viewportPorOjo: m.viewport,
@@ -443,7 +459,11 @@ const DisplayWebXR = {
     if (!d) return "(sin datos: la sesión no llegó a arrancar)";
     const L = [];
     L.push(`reference space: ${d.refSpace} · duración ${d.duracionS} s · ${d.framesTotales} frames`);
-    L.push(`fps ${d.fpsMedidoPorFrames} (por frames) · ${d.fpsPromedioHUD} (promedio) · mínimo ${d.fpsMinimo} · p95 peor ${d.p95PeorMs} ms`);
+    L.push(`fps ${d.fpsMedidoPorFrames} (por frames) · ${d.fpsPromedioHUD} (promedio)`);
+    L.push(`en régimen (sin los ${ARRANQUE_MS / 1000} s de arranque): mínimo ` +
+      `${d.fpsMinimoEnRegimen == null ? "?" : d.fpsMinimoEnRegimen} fps · p95 peor ` +
+      `${d.p95PeorEnRegimenMs == null ? "?" : d.p95PeorEnRegimenMs} ms` +
+      `  ·  con arranque: ${d.fpsMinimo} fps / ${d.p95PeorMs} ms`);
     L.push(`${(d.triangulosPorOjo / 1000).toFixed(0)} k triángulos · ${d.drawCallsPorOjo} draw calls (por ojo) · tier ${d.tier} escalón ${d.escalon}`);
     L.push(`framebuffer ${d.framebuffer || "?"} · viewport por ojo ${d.viewportPorOjo || "?"} · escala ${d.escalaFramebuffer}`);
     L.push(`IPD del runtime ${d.ipdRuntimeM == null ? "?" : d.ipdRuntimeM + " m"} · fov vertical ${d.fovVerticalPorOjo || "?"}° · aspect ${d.aspectPorOjo || "?"}`);

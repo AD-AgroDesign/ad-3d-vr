@@ -152,10 +152,10 @@
       <div><label>Bandeja → lente (mm)</label><input type="number" id="bandejaLente" value="37" step="0.5"></div>
     </div>
     <div class="campos" style="margin-top:12px">
-      <div><label>Campo visual exterior (°)</label><input type="number" id="fov0" value="45" step="1"></div>
-      <div><label>interior (°)</label><input type="number" id="fov1" value="45" step="1"></div>
-      <div><label>arriba (°)</label><input type="number" id="fov2" value="45" step="1"></div>
-      <div><label>abajo (°)</label><input type="number" id="fov3" value="45" step="1"></div>
+      <div><label>Campo visual exterior (°)</label><input type="number" id="fov0" value="55" step="1"></div>
+      <div><label>interior (°)</label><input type="number" id="fov1" value="55" step="1"></div>
+      <div><label>arriba (°)</label><input type="number" id="fov2" value="55" step="1"></div>
+      <div><label>abajo (°)</label><input type="number" id="fov3" value="55" step="1"></div>
       <div><label>Distorsión k1</label><input type="number" id="k1" value="0.441" step="0.001"></div>
       <div><label>Distorsión k2</label><input type="number" id="k2" value="0.156" step="0.001"></div>
     </div>
@@ -479,15 +479,18 @@ const PRESETS = {
      "VRA3PLUS", ángulo de visión 90°, ajuste de distancia de pupila, para
      teléfonos de 4 a 6 pulgadas.
 
-     Los 45° por lado salen de ese "90°" de la caja: el número comercial es el
-     ángulo TOTAL, y el perfil pide el semiángulo hacia cada lado. Contra los
-     40° del default de Chrome ya es más imagen, y de ahí se sube probando.
+     De ese "90°" de la caja salen 45° por lado (el número comercial es el
+     ángulo TOTAL y el perfil pide el semiángulo). Pero el dueño probó 45 y 55
+     en el visor y **eligió 55**, así que ése es el valor del preset: la lente
+     muestra más de lo que dice la caja, que es lo habitual. El de 45 quedó
+     como el otro preset genérico por si hay que volver.
+
      Las tres distancias son un punto de partida razonable para un visor de
      este tipo: **hay que medirlas**, sobre todo la de entre lentes, que en
      este modelo es regulable con la ruedita. */
   "Campers CM-VRA3 (el visor de Mike)": {
     vendor: "Campers", modelo: "CM-VRA3",
-    entreLentes: 63, pantallaLente: 42, bandejaLente: 37, fov: [45, 45, 45, 45], k: [0.441, 0.156]
+    entreLentes: 63, pantallaLente: 42, bandejaLente: 37, fov: [55, 55, 55, 55], k: [0.441, 0.156]
   },
   "Cardboard v1 (el default de Chrome)": {
     vendor: "Google, Inc.", modelo: "Cardboard v1",

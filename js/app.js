@@ -46,37 +46,47 @@ function applyGrowth(key, t) {
   Veg.setGrowth(key, t);
 }
 
-/* ---------- Conmutación de escenario (port de main.js:795-826) ---------- */
+/* ---------- Conmutación de escenario (port de main.js:795-826) ----------
+
+   La animación NO tiene loop propio: la avanza el driver de turno desde su
+   callback de update. Tenía un `requestAnimationFrame` de la ventana, y eso
+   se rompe en WebXR — dentro de una sesión inmersiva el rAF del documento se
+   frena (el que corre es el de la sesión), así que el cross-fade quedaba
+   congelado y el paisaje nuevo no terminaba de crecer hasta salir.
+   Ticked desde el driver funciona igual en flat, cardboard y XR, que es
+   justamente la razón de ser de la arquitectura de §5.3. */
+const FADE_MS = 700, GROW_MS = 1800;
+let animEscenario = null;         // { prev, next, t0 }
+
 function setScenario(next, animate = true) {
   if (next === state.scenario) return;
   const prev = state.scenario;
   state.scenario = next;
   actualizarEtiqueta();
 
-  if (state.anim) cancelAnimationFrame(state.anim);
+  animEscenario = null;
   if (!animate) {
     applyOpacity(prev, 0); applyGrowth(prev, 0);
     applyOpacity(next, 1); applyGrowth(next, 1);
     return;
   }
+  animEscenario = { prev, next, t0: performance.now() };
+}
 
-  const FADE_MS = 700, GROW_MS = 1800;
-  const t0 = performance.now();
-  const frame = now => {
-    // El timestamp del primer rAF puede ser anterior a t0 (quirk de Chrome,
-    // §11.4): sin este clamp salen opacidades negativas. Bug real del
-    // proyecto original, ronda del 2026-07-16.
-    const dt = Math.max(0, now - t0);
-    const fade = Math.min(dt / FADE_MS, 1);
-    const grow = easeOutCubic(Math.min(dt / GROW_MS, 1));
-    applyOpacity(prev, 1 - fade);
-    applyOpacity(next, fade);
-    applyGrowth(prev, 1 - grow);
-    applyGrowth(next, grow);
-    if (dt < GROW_MS) state.anim = requestAnimationFrame(frame);
-    else state.anim = null;
-  };
-  state.anim = requestAnimationFrame(frame);
+/* Un paso de la animación. `now` lo trae el driver; el Math.max(0, ...) es por
+   el quirk de rAF de §11.4, donde el primer timestamp puede ser anterior a t0
+   (bug real del proyecto original, ronda del 2026-07-16). */
+function tickEscenario(now) {
+  const a = animEscenario;
+  if (!a) return;
+  const dt = Math.max(0, now - a.t0);
+  const fade = Math.min(dt / FADE_MS, 1);
+  const grow = easeOutCubic(Math.min(dt / GROW_MS, 1));
+  applyOpacity(a.prev, 1 - fade);
+  applyOpacity(a.next, fade);
+  applyGrowth(a.prev, 1 - grow);
+  applyGrowth(a.next, grow);
+  if (dt >= GROW_MS) animEscenario = null;
 }
 
 /* ---------- UI mínima (en VR casi no hay DOM; esto es para escritorio) ---------- */
@@ -208,6 +218,22 @@ async function salirVR() {
    sesión entera así). El primer intento avisa; el segundo entra igual, porque
    puede no haber mando y no hay que bloquear el camino. */
 let _insistirXR = false;
+let _vigilaMando = 0;
+
+/* El aviso tiene que CONTESTAR cuando el mando despierta. La primera versión
+   era un cartel fijo: el dueño apretaba el botón, la escena respondía y el
+   texto seguía diciendo lo mismo, así que no había forma de saber si había
+   servido. Se vigila la bandera (la escribe Input.leer() en cada frame) y el
+   cartel cambia solo. */
+function vigilarMando() {
+  clearInterval(_vigilaMando);
+  _vigilaMando = setInterval(() => {
+    if (!Input.activado) return;
+    clearInterval(_vigilaMando); _vigilaMando = 0;
+    aviso(`<b>✓ Mando detectado.</b> Ya va a responder adentro de la sesión.<br>` +
+      `Tocá <b>Probar WebXR</b> para entrar.`);
+  }, 150);
+}
 
 async function entrarXR() {
   if (!Input.activado && !_insistirXR) {
@@ -215,9 +241,12 @@ async function entrarXR() {
     aviso(`<b>Apretá un botón del mando antes de entrar.</b><br>` +
       `Todavía no mandó nada a la página, y adentro de la sesión ya no se puede ` +
       `despertar: el mando aparecería pero no respondería.<br>` +
-      `Después volvé a tocar <b>Probar WebXR</b> (o tocalo de nuevo para entrar sin mando).`);
+      `Este cartel avisa solo cuando lo detecte. ` +
+      `Si no tenés mando a mano, tocá <b>Probar WebXR</b> de nuevo para entrar igual.`);
+    vigilarMando();
     return;
   }
+  clearInterval(_vigilaMando); _vigilaMando = 0;
   _insistirXR = false;
   if (Rig.alturaOjo() > 60) { Rig.setAlturaOjo(Rig.alturaDron); Chunks.invalidar(); }
   aviso("Abriendo la sesión WebXR…");
@@ -358,6 +387,7 @@ function actualizarBotones() {
       // `msFrame` es el tiempo REAL del frame: el driver manda por separado
       // el que usa la locomoción (topeado) y el que se mide (crudo)
       onUpdate: (msFrame, now) => {
+        tickEscenario(now);            // el cross-fade lo avanza el driver, no el rAF del DOM
         Veg.tick(now / 1000);          // reloj del viento
         Sky.update(Rig);
         Chunks.update(Rig.rig.position, now);
@@ -438,7 +468,8 @@ function actualizarBotones() {
       window.__vr = {
         state, renderer, scene, Rig, Sky, Tiles, TilesFondo, Ground, Veg, Perf, Chunks,
         DisplayFlat, DisplayCardboard, DisplayWebXR, Cabeza, Inmersion, Input, Vigneta,
-        setScenario, applyOpacity, applyGrowth, extent,
+        setScenario, tickEscenario, applyOpacity, applyGrowth, extent,
+        animEscenario: () => animEscenario,
         aplicarPose: n => aplicarPose(n, extent), entrarVR, salirVR, entrarXR, usarDriver,
         lonLatToScene, sceneToLonLat, projInfo,
         info: () => ({
