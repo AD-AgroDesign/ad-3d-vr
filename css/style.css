@@ -96,6 +96,24 @@ body.estereo #hud2 {
 body.estereo #hud { left: calc(50% - var(--sep, 50vw) / 2); }
 body.estereo #hud2 { left: calc(50% + var(--sep, 50vw) / 2); }
 
+/* --- Banner del tour (P6, §9.13) ---
+   Va abajo y al centro en escritorio; en cardboard se duplica a los centros
+   de lente, con las mismas reglas que el HUD (width: max-content y tipografía
+   idéntica en los dos, o el texto no fusiona). */
+#tour, #tour2 {
+  position: fixed; z-index: 15; display: none;
+  bottom: 15%; left: 50%; transform: translateX(-50%);
+  background: var(--panel); border-radius: 999px; padding: 8px 18px;
+  font: 600 14px/1.3 -apple-system, Segoe UI, Roboto, system-ui, sans-serif;
+  text-align: center; width: max-content; max-width: 80vw;
+  color: var(--gold); pointer-events: none;
+}
+body.estereo #tour, body.estereo #tour2 {
+  bottom: 22%; font-size: 12px; padding: 6px 12px; max-width: 42vw;
+}
+body.estereo #tour { left: calc(50% - var(--sep, 50vw) / 2); }
+body.estereo #tour2 { left: calc(50% + var(--sep, 50vw) / 2); }
+
 /* --- Botones del modo VR --- */
 #vr-botones {
   position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%);

@@ -271,7 +271,13 @@ const Rig = {
   },
 
   velocidad: 0,
-  flujo: 0
+  flujo: 0,
+  /* Flujo óptico del movimiento AUTOMÁTICO (el tour, P6). Va aparte de
+     `flujo` porque `update()` lo recalcula desde el intent en cada frame y
+     lo dejaría en cero: durante el tour el usuario no toca nada y la viñeta
+     tiene que encenderse igual — es justamente el caso donde más hace falta,
+     porque el movimiento que uno no provoca marea más. */
+  flujoTour: 0
 };
 
 /* ============================================================
@@ -339,7 +345,7 @@ const Vigneta = {
      flujo óptico en Rig.update. El amortiguado es por tiempo, no por frame. */
   update(rig, dtMs) {
     if (!this.malla) return;
-    const objetivo = (rig.flujo || 0) * this.opacidadMax;
+    const objetivo = Math.max(rig.flujo || 0, rig.flujoTour || 0) * this.opacidadMax;
     const u = this.malla.material.uniforms.opacidad;
     u.value += (objetivo - u.value) * (1 - Math.exp(-dtMs / this._tau));
     if (u.value < 0.004) { u.value = 0; this.malla.visible = false; }

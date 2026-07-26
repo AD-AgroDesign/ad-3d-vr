@@ -127,6 +127,20 @@ function onResize() {
   if (estereo) DisplayCardboard.aplicarSepCss();
 }
 
+/* Banner del tour (§9.13, punto 1). Se pinta en los dos paneles: en cardboard
+   el de una esquina no se lee con el visor puesto, así que va uno por ojo, en
+   el centro de cada lente, con las mismas reglas del HUD. */
+function bannerTour(txt) {
+  for (const id of ["tour", "tour2"]) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    el.textContent = txt || "";
+    // el espejo del ojo derecho sólo tiene sentido en estéreo
+    const espejo = id === "tour2" && driver !== DisplayCardboard;
+    el.style.display = (txt && !espejo) ? "block" : "none";
+  }
+}
+
 function aviso(html) {
   const el = document.getElementById("aviso");
   if (!el) return;
@@ -275,6 +289,18 @@ function finXR(reporte) {
   actualizarBotones();
 }
 
+/* ---------- Tour (P6) ----------
+   El tour recorre el paisaje MULTIFUNCIONAL: los corredores y los parches de
+   naturaleza sólo existen ahí, y los textos del guión hablan de eso ("el
+   paisaje rediseñado"). Si está puesto el Paisaje Actual, conmuta al arrancar
+   —con su cross-fade— en vez de volar sobre corredores invisibles. */
+function alternarTour(extent) {
+  if (Tour.activo) { Tour.detener("el usuario"); return; }
+  if (state.scenario !== "multi") setScenario("multi");
+  if (!Tour.arrancar(state.data.multi, extent, performance.now()))
+    aviso("En este campo no hay corredores ni parches para armar el tour.");
+}
+
 function actualizarBotones() {
   const enVR = driver === DisplayCardboard;
   const enXR = driver === DisplayWebXR;
@@ -386,8 +412,10 @@ function actualizarBotones() {
     const cbs = {
       // `msFrame` es el tiempo REAL del frame: el driver manda por separado
       // el que usa la locomoción (topeado) y el que se mide (crudo)
-      onUpdate: (msFrame, now) => {
+      onUpdate: (msFrame, now, dtMs) => {
         tickEscenario(now);            // el cross-fade lo avanza el driver, no el rAF del DOM
+        // el tour se cancela solo si el usuario toma el control (ver Tour.update)
+        if (Tour.activo) Tour.update(dtMs || 16, now);
         Veg.tick(now / 1000);          // reloj del viento
         Sky.update(Rig);
         Chunks.update(Rig.rig.position, now);
@@ -401,6 +429,10 @@ function actualizarBotones() {
         Perf.frame(renderer, msFrame);
       },
       onAction: acc => {
+        /* Cualquier acción que no sea el propio tour lo corta: si no, el
+           usuario y el tour se pelearían por el rig. Es lo que hace el
+           original con los eventos del canvas (main.js:1163). */
+        if (acc !== "tour" && Tour.activo) Tour.detener("acción del usuario");
         if (acc === "toggleScenario") setScenario(state.scenario === "inicial" ? "multi" : "inicial");
         else if (acc === "home") { aplicarPose("aerea", extent); Chunks.invalidar(); }
         else if (acc === "modo") { Rig.alternarModo(); Chunks.invalidar(); }
@@ -411,7 +443,7 @@ function actualizarBotones() {
         // ?calib: ajustar la separación con el mando, con el visor puesto
         else if (acc === "sepMenos") aviso(textoSeparacion(DisplayCardboard.ajustarSeparacion(-4)));
         else if (acc === "sepMas") aviso(textoSeparacion(DisplayCardboard.ajustarSeparacion(+4)));
-        else if (acc === "tour") console.log("tour: llega en P6");
+        else if (acc === "tour") alternarTour(extent);
         else if (acc === "menu") console.log("menú in-world: llega en P6");
       }
     };
@@ -419,6 +451,10 @@ function actualizarBotones() {
     // Una sola fuente de entrada para los dos drivers (§5.3c)
     Input.init({ onAction: cbs.onAction });
     Vigneta.init(Rig);
+    Tour.init({
+      onMensaje: bannerTour,
+      onFin: motivo => console.log("tour: fin (" + motivo + ")")
+    });
 
     DisplayFlat.init(renderer, scene, Rig, cbs);
     DisplayCardboard.init(renderer, scene, Rig, Object.assign({ onAviso: aviso }, cbs));
@@ -467,7 +503,8 @@ function actualizarBotones() {
     if (DEBUG) {
       window.__vr = {
         state, renderer, scene, Rig, Sky, Tiles, TilesFondo, Ground, Veg, Perf, Chunks,
-        DisplayFlat, DisplayCardboard, DisplayWebXR, Cabeza, Inmersion, Input, Vigneta,
+        DisplayFlat, DisplayCardboard, DisplayWebXR, Cabeza, Inmersion, Input, Vigneta, Tour,
+        alternarTour: () => alternarTour(extent),
         setScenario, tickEscenario, applyOpacity, applyGrowth, extent,
         animEscenario: () => animEscenario,
         aplicarPose: n => aplicarPose(n, extent), entrarVR, salirVR, entrarXR, usarDriver,
@@ -478,6 +515,7 @@ function actualizarBotones() {
           tiles: Tiles.info, suelo: Ground.info(), veg: Veg.info(),
           chunks: Chunks.info(), perf: Perf.snapshot(renderer),
           estereo: DisplayCardboard.info(), webxr: DisplayWebXR.info(), input: Input.info(),
+          tour: Tour.info(),
           camara: {
             x: +Rig.rig.position.x.toFixed(1), z: +Rig.rig.position.z.toFixed(1),
             altura: +Rig.alturaOjo().toFixed(1), rumbo: +Rig.rumbo().toFixed(1)
