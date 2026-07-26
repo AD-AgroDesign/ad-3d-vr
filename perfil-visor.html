@@ -88,6 +88,10 @@
       <li>Cargá las medidas de tu visor, abajo. El QR se actualiza solo.</li>
       <li>En el teléfono, entrá en <b>Probar WebXR</b>. Cuando Chrome ofrezca escanear el QR,
         apuntá a la pantalla de la computadora.</li>
+      <li><b>Si ya no te pregunta:</b> Chrome recuerda el visor elegido y entra directo. El
+        escáner se vuelve a abrir desde el <b>menú de tres puntos (⋮) que aparece arriba a la
+        derecha de la vista partida</b>, con la opción tipo <i>«Cambiar visor» / «Switch
+        viewer»</i>. Hacelo con el teléfono en la mano, antes de meterlo en el visor.</li>
       <li>Queda recordado en el teléfono. Para volver atrás, escaneá el preset
         <b>Cardboard v1</b>, que es el default de Chrome.</li>
     </ol>
@@ -141,17 +145,17 @@
     <h2>Medidas del visor</h2>
     <div class="botones" id="presets"></div>
     <div class="campos" style="margin-top:12px">
-      <div><label>Marca</label><input type="text" id="vendor" value="Generico"></div>
-      <div><label>Modelo</label><input type="text" id="modelo" value="Visor de Mike"></div>
+      <div><label>Marca</label><input type="text" id="vendor" value="Campers"></div>
+      <div><label>Modelo</label><input type="text" id="modelo" value="CM-VRA3"></div>
       <div><label>Entre lentes (mm)</label><input type="number" id="entreLentes" value="63" step="0.5"></div>
       <div><label>Pantalla → lente (mm)</label><input type="number" id="pantallaLente" value="42" step="0.5"></div>
       <div><label>Bandeja → lente (mm)</label><input type="number" id="bandejaLente" value="37" step="0.5"></div>
     </div>
     <div class="campos" style="margin-top:12px">
-      <div><label>Campo visual exterior (°)</label><input type="number" id="fov0" value="50" step="1"></div>
-      <div><label>interior (°)</label><input type="number" id="fov1" value="50" step="1"></div>
-      <div><label>arriba (°)</label><input type="number" id="fov2" value="50" step="1"></div>
-      <div><label>abajo (°)</label><input type="number" id="fov3" value="50" step="1"></div>
+      <div><label>Campo visual exterior (°)</label><input type="number" id="fov0" value="45" step="1"></div>
+      <div><label>interior (°)</label><input type="number" id="fov1" value="45" step="1"></div>
+      <div><label>arriba (°)</label><input type="number" id="fov2" value="45" step="1"></div>
+      <div><label>abajo (°)</label><input type="number" id="fov3" value="45" step="1"></div>
       <div><label>Distorsión k1</label><input type="number" id="k1" value="0.441" step="0.001"></div>
       <div><label>Distorsión k2</label><input type="number" id="k2" value="0.156" step="0.001"></div>
     </div>
@@ -471,6 +475,20 @@ const QR = (function () {
    3. La página
    ============================================================ */
 const PRESETS = {
+  /* El visor del dueño, con lo que dice la caja (2026-07-26): CM-VRA3
+     "VRA3PLUS", ángulo de visión 90°, ajuste de distancia de pupila, para
+     teléfonos de 4 a 6 pulgadas.
+
+     Los 45° por lado salen de ese "90°" de la caja: el número comercial es el
+     ángulo TOTAL, y el perfil pide el semiángulo hacia cada lado. Contra los
+     40° del default de Chrome ya es más imagen, y de ahí se sube probando.
+     Las tres distancias son un punto de partida razonable para un visor de
+     este tipo: **hay que medirlas**, sobre todo la de entre lentes, que en
+     este modelo es regulable con la ruedita. */
+  "Campers CM-VRA3 (el visor de Mike)": {
+    vendor: "Campers", modelo: "CM-VRA3",
+    entreLentes: 63, pantallaLente: 42, bandejaLente: 37, fov: [45, 45, 45, 45], k: [0.441, 0.156]
+  },
   "Cardboard v1 (el default de Chrome)": {
     vendor: "Google, Inc.", modelo: "Cardboard v1",
     entreLentes: 60, pantallaLente: 42, bandejaLente: 35, fov: [40, 40, 40, 40], k: [0.441, 0.156]
