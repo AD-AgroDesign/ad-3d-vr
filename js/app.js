@@ -97,9 +97,17 @@ function carga(txt, pct) {
 
 function onResize() {
   const w = innerWidth, h = innerHeight;
+  // Guarda contra 0×0: pasa con la pestaña oculta o durante una rotación de
+  // pantalla, y `aspect = 0/0` deja la matriz de proyección en NaN — o sea
+  // pantalla negra hasta el próximo resize. Visto en el panel embebido.
+  if (w < 1 || h < 1) return;
   renderer.setSize(w, h, false);
   Rig.camera.aspect = w / h;
   Rig.camera.updateProjectionMatrix();
+  // la viñeta se escala al cuadro; en estéreo el aspect es el de un ojo
+  const estereo = driver === DisplayCardboard;
+  Vigneta.ajustar(Rig.camera, Rig.camera.aspect * (estereo ? 0.5 : 1));
+  if (estereo) DisplayCardboard.aplicarSepCss();
 }
 
 function aviso(html) {
@@ -300,8 +308,17 @@ function actualizarBotones() {
         else if (acc === "home") { aplicarPose("aerea", extent); Chunks.invalidar(); }
         else if (acc === "modo") { Rig.alternarModo(); Chunks.invalidar(); }
         else if (acc === "recenter" && driver === DisplayCardboard) DisplayCardboard.recentrar();
+        // el snap lo ejecuta el rig (transición de 80 ms, §9.11.3)
+        else if (acc === "snapIzq") Rig.snap(-1);
+        else if (acc === "snapDer") Rig.snap(+1);
+        else if (acc === "tour") console.log("tour: llega en P6");
+        else if (acc === "menu") console.log("menú in-world: llega en P6");
       }
     };
+
+    // Una sola fuente de entrada para los dos drivers (§5.3c)
+    Input.init({ onAction: cbs.onAction });
+    Vigneta.init(Rig);
 
     DisplayFlat.init(renderer, scene, Rig, cbs);
     DisplayCardboard.init(renderer, scene, Rig, Object.assign({ onAviso: aviso }, cbs));
@@ -338,7 +355,7 @@ function actualizarBotones() {
     if (DEBUG) {
       window.__vr = {
         state, renderer, scene, Rig, Sky, Tiles, TilesFondo, Ground, Veg, Perf, Chunks,
-        DisplayFlat, DisplayCardboard, Cabeza, Inmersion,
+        DisplayFlat, DisplayCardboard, Cabeza, Inmersion, Input, Vigneta,
         setScenario, applyOpacity, applyGrowth, extent,
         aplicarPose: n => aplicarPose(n, extent), entrarVR, salirVR, usarDriver,
         lonLatToScene, sceneToLonLat, projInfo,
@@ -347,7 +364,7 @@ function actualizarBotones() {
           modo: driver ? driver.label : null,
           tiles: Tiles.info, suelo: Ground.info(), veg: Veg.info(),
           chunks: Chunks.info(), perf: Perf.snapshot(renderer),
-          estereo: DisplayCardboard.info(),
+          estereo: DisplayCardboard.info(), input: Input.info(),
           camara: {
             x: +Rig.rig.position.x.toFixed(1), z: +Rig.rig.position.z.toFixed(1),
             altura: +Rig.alturaOjo().toFixed(1), rumbo: +Rig.rumbo().toFixed(1)

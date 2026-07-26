@@ -162,28 +162,146 @@ const Rig = {
   },
   alternarModo() { this.setModo(this.modo === "dron" ? "suelo" : "dron"); },
 
+  /* --- Confort (§9.11) ---
+
+     Snap turn: ±30° con una transición corta en vez de un salto seco. El giro
+     continuo por mando es la causa número uno de mareo, así que el default es
+     snap y el continuo queda detrás de ?giro=continuo. La transición es POR
+     TIEMPO (§12.2), no por frame: con 60 fps en cardboard y 72–90 en XR tiene
+     que durar lo mismo.
+
+     Rampa de velocidad: sin ella, con un mando digital el avance es un escalón
+     de 0 a velocidad plena. Con el stick analógico del mando del dueño la
+     rampa igual hace falta, porque el stick llega al tope en dos frames. */
+  snapGrados: 30,
+  snapMs: 80,
+  rampaTau: 100,            // ms; ~300 ms hasta el 95 %
+  _snapRestante: 0,         // grados que faltan por girar
+  _mv: { x: 0, y: 0 },      // velocidad suavizada (fracción de la nominal)
+
+  snap(signo) {
+    // se acumula: dos toques rápidos giran 60°, no se pisan
+    this._snapRestante += signo * this.snapGrados;
+  },
+
   /* --- Locomoción sobre el `intent` normalizado (§5.3c) ---
      move.y = avance (+1 adelante), move.x = strafe (+1 derecha),
-     turn = yaw continuo, rise = subir/bajar. */
+     turn = yaw continuo (sólo con ?giro=continuo), rise = subir/bajar. */
   update(intent, dt) {
     if (!intent) return;
+
+    // Rampa: la intención se persigue con amortiguado por tiempo
+    const mv = intent.move || { x: 0, y: 0 };
+    const k = 1 - Math.exp(-(dt * 1000) / this.rampaTau);
+    this._mv.x += (mv.x - this._mv.x) * k;
+    this._mv.y += (mv.y - this._mv.y) * k;
+    if (Math.abs(this._mv.x) < 1e-3) this._mv.x = 0;
+    if (Math.abs(this._mv.y) < 1e-3) this._mv.y = 0;
+
     const th = this.rig.rotation.y;
     // adelante = (-sin θ, -cos θ); derecha = (cos θ, -sin θ)  en (x, z)
     const sin = Math.sin(th), cos = Math.cos(th);
     const v = (this.modo === "suelo" ? this.vel.suelo : this.vel.dron) * (intent.turbo ? 4 : 1);
-    const mv = intent.move || { x: 0, y: 0 };
-    if (mv.x || mv.y) {
-      const fx = -sin * mv.y + cos * mv.x;
-      const fz = -cos * mv.y - sin * mv.x;
-      const len = Math.hypot(fx, fz) || 1;
-      this.rig.position.x += (fx / len) * v * dt;
-      this.rig.position.z += (fz / len) * v * dt;
+    if (this._mv.x || this._mv.y) {
+      const fx = -sin * this._mv.y + cos * this._mv.x;
+      const fz = -cos * this._mv.y - sin * this._mv.x;
+      // se normaliza sólo si el módulo pasa 1, para no perder el analógico:
+      // con el stick a media caña la velocidad tiene que ser media
+      const len = Math.hypot(fx, fz);
+      const esc = len > 1 ? 1 / len : 1;
+      this.rig.position.x += fx * esc * v * dt;
+      this.rig.position.z += fz * esc * v * dt;
+    }
+    this.velocidad = Math.hypot(this._mv.x, this._mv.y) * v;   // la usa la viñeta
+
+    // Snap: se consume a velocidad constante hasta agotar los grados
+    if (this._snapRestante) {
+      const paso = this.snapGrados * (dt * 1000) / this.snapMs;
+      const d = Math.sign(this._snapRestante) * Math.min(paso, Math.abs(this._snapRestante));
+      this.rig.rotation.y -= d * DEG;
+      this._snapRestante -= d;
     }
     if (intent.turn) this.rig.rotation.y -= intent.turn * this.velGiro * dt;
+
     if (intent.rise) {
       const alt = this.alturaOjo() + intent.rise * this.velSubida * (intent.turbo ? 4 : 1) * dt;
       this.setAlturaOjo(Math.min(2000, Math.max(this.eyeHeight, alt)));
       this.modo = this.alturaOjo() > this.eyeHeight + 0.5 ? "dron" : "suelo";
     }
+  },
+
+  velocidad: 0
+};
+
+/* ============================================================
+   Viñeta de confort (§9.11.5) — «la mitigación con mejor relación
+   costo/beneficio que existe»: oscurecer la periferia mientras hay
+   desplazamiento reduce mucho el mareo.
+
+   Va como un ANILLO pegado a la cámara, no como un overlay del DOM: así
+   funciona igual en mono, en estéreo (cada ojo la ve centrada en su propia
+   lente) y en XR, sin tocar nada. El agujero del centro evita pagar fill rate
+   donde no se ve nada — que en un Mali es el recurso escaso.
+
+   Desviación de §7 documentada: vive acá y no en un archivo propio porque es
+   parte del confort de locomoción, igual que la rampa y el snap.
+   ============================================================ */
+const Vigneta = {
+  malla: null,
+  opacidadMax: 0.55,
+  velPlena: 8,              // m/s a partir de los cuales está al máximo
+  _tau: 140,                // ms de entrada/salida
+
+  init(rig) {
+    // El anillo va de 0,5 a 1,05 en unidades de "distancia a la esquina", así
+    // que oscurece el 50 % exterior del cuadro y nada del centro.
+    const geo = new THREE.RingGeometry(0.5, 1.05, 48, 1);
+    const mat = new THREE.ShaderMaterial({
+      transparent: true, depthTest: false, depthWrite: false, fog: false,
+      side: THREE.DoubleSide,
+      uniforms: { opacidad: { value: 0 } },
+      vertexShader: `
+        varying float vR;
+        void main() {
+          vR = length(position.xy);
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }`,
+      fragmentShader: `
+        uniform float opacidad;
+        varying float vR;
+        void main() {
+          float a = smoothstep(0.5, 1.0, vR) * opacidad;
+          gl_FragColor = vec4(0.0, 0.0, 0.0, a);
+        }`
+    });
+    this.malla = new THREE.Mesh(geo, mat);
+    this.malla.frustumCulled = false;
+    this.malla.renderOrder = 1000;
+    this.malla.position.set(0, 0, -1);      // 1 m delante del ojo
+    this.malla.visible = false;
+    rig.camera.add(this.malla);
+    this.ajustar(rig.camera, rig.camera.aspect);
+    return this;
+  },
+
+  /* Se escala a la DISTANCIA A LA ESQUINA del cuadro, no a la semialtura: así
+     cubre la misma fracción de la vista con cualquier aspect, y hay que
+     llamarlo cuando cambia el fov (flat 60 → cardboard 90) o el tamaño.
+     En estéreo el aspect que corresponde es el de UN ojo (la mitad). */
+  ajustar(camera, aspect) {
+    if (!this.malla) return;
+    const h = Math.tan(camera.fov * Math.PI / 360);          // semialtura a 1 m
+    const a = aspect || camera.aspect || 1;
+    this.malla.scale.setScalar(h * Math.sqrt(1 + a * a));    // semidiagonal
+  },
+
+  /* `vel` en m/s; el amortiguado es por tiempo, no por frame */
+  update(rig, dtMs) {
+    if (!this.malla) return;
+    const objetivo = Math.min(1, (rig.velocidad || 0) / this.velPlena) * this.opacidadMax;
+    const u = this.malla.material.uniforms.opacidad;
+    u.value += (objetivo - u.value) * (1 - Math.exp(-dtMs / this._tau));
+    if (u.value < 0.004) { u.value = 0; this.malla.visible = false; }
+    else this.malla.visible = true;
   }
 };

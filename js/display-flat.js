@@ -21,8 +21,6 @@ const DisplayFlat = {
   label: "flat",
   renderer: null, scene: null, rig: null,
   onUpdate: null, onAction: null,
-  intent: { move: { x: 0, y: 0 }, turn: 0, rise: 0, turbo: false },
-  teclas: {},
   corriendo: false,
   _rafId: 0,
   _prev: 0,
@@ -51,25 +49,9 @@ const DisplayFlat = {
       rig.camera.rotation.set(this.pitch, 0, 0);
     });
 
-    addEventListener("keydown", e => {
-      if (!this.corriendo || e.repeat) return;
-      this.teclas[e.code] = true;
-      const acc = ACCIONES[e.code];
-      if (acc) { e.preventDefault(); if (this.onAction) this.onAction(acc); }
-    });
-    addEventListener("keyup", e => { this.teclas[e.code] = false; });
-    addEventListener("blur", () => { this.teclas = {}; });
+    // El teclado y el gamepad los lee input.js: los dos drivers compartían
+    // una copia de esa lectura y ahora es una sola (§5.3c).
     return this;
-  },
-
-  _leerIntent() {
-    const t = this.teclas, i = this.intent;
-    i.move.y = (t.KeyW ? 1 : 0) - (t.KeyS ? 1 : 0);
-    i.move.x = (t.KeyD ? 1 : 0) - (t.KeyA ? 1 : 0);
-    i.turn = (t.KeyE ? 1 : 0) - (t.KeyQ ? 1 : 0);
-    i.rise = (t.KeyR ? 1 : 0) - (t.KeyF ? 1 : 0);
-    i.turbo = !!(t.ShiftLeft || t.ShiftRight);
-    return i;
   },
 
   start() {
@@ -89,7 +71,8 @@ const DisplayFlat = {
       const crudo = Math.max(0, now - this._prev);
       const dtMs = Math.min(100, crudo);
       this._prev = now;
-      this.rig.update(this._leerIntent(), dtMs / 1000);
+      this.rig.update(Input.leer(), dtMs / 1000);
+      Vigneta.update(this.rig, dtMs);
       if (this.onUpdate) this.onUpdate(crudo, now, dtMs);
       this.render();
     };
@@ -99,15 +82,4 @@ const DisplayFlat = {
   stop() { this.corriendo = false; cancelAnimationFrame(this._rafId); },
 
   render() { this.renderer.render(this.scene, this.rig.camera); }
-};
-
-/* Mapeo de teclado: el mismo de la tabla de §9.10, para que el mando del
-   dueño caiga sobre las mismas acciones cuando llegue P5 */
-const ACCIONES = {
-  Space: "toggleScenario",
-  KeyC: "recenter",
-  KeyT: "tour",
-  KeyG: "modo",
-  KeyH: "home",
-  KeyM: "menu"
 };

@@ -48,7 +48,17 @@ const IPD = 0.064;
    Así no hay que tocar la matriz de proyección — que la cachea StereoCamera y
    mutarla cada frame la acumularía.
 
-   `null` = mitad exacta del canvas, que es el comportamiento anterior. */
+   **Default: 330 px CSS, medido en el visor del dueño (2026-07-26).** Probó
+   varios teléfonos que entran bien en su visor: **338 px fusiona y 330 px
+   fusiona con menos esfuerzo de foco**, así que el default es 330. No es un
+   número derivado de una fórmula porque no se puede: el navegador NO expone el
+   DPI físico. Y es mejor errar por defecto hacia el lado ESTRECHO — los ojos
+   convergen sin esfuerzo y divergen casi nada, así que una separación de menos
+   se fusiona y una de más no.
+   Se acota a la mitad del canvas para que en una pantalla angosta no se cruce.
+   `?sep=auto` vuelve a este default; el valor calibrado se recuerda por
+   dispositivo, porque depende del teléfono Y del visor. */
+const SEP_DEFAULT = 330;
 const SEP_MIN = 40, SEP_PASO = 8;      // px CSS
 const SEP_CLAVE = "ad3dvr.sepPx";      // se recuerda por dispositivo
 
@@ -343,8 +353,6 @@ const DisplayCardboard = {
   renderer: null, scene: null, rig: null,
   onUpdate: null, onAction: null, onAviso: null,
   stereo: null,
-  intent: { move: { x: 0, y: 0 }, turn: 0, rise: 0, turbo: false },
-  teclas: {},
   corriendo: false,
   mouse: false,             // fallback de escritorio: mouse look si no hay sensores
   sepPx: null,              // separación de centros de imagen; null = mitad del canvas
@@ -371,7 +379,7 @@ const DisplayCardboard = {
     // verificación. Por eso además se informa de dónde salió el valor y el
     // HUD lo muestra en pantalla.
     const pedidoSep = params.get("sep");
-    let fuenteSep = "default (mitad del canvas)";
+    let fuenteSep = `default ${SEP_DEFAULT} px (calibrado en el visor del dueño)`;
     if (/^(auto|reset|0)$/i.test(pedidoSep || "")) {
       this.sepPx = null;
       try { localStorage.removeItem(SEP_CLAVE); } catch (e) {}
@@ -400,19 +408,7 @@ const DisplayCardboard = {
         `mirá con el mouse (click para capturarlo) o abrí <b>diag.html</b>.`);
     };
 
-    /* Teclado. En P4 no hay locomoción de mando todavía (eso es P5), pero
-       muchos mandos "VR" baratos se presentan como TECLADO (§9.10), así que
-       esto ya les sirve, y en escritorio permite verificar el estéreo.
-       El mapa de acciones es el de display-flat.js: cuando P5 traiga
-       input.js, las dos lecturas de teclado se unifican ahí. */
-    addEventListener("keydown", e => {
-      if (!this.corriendo || e.repeat) return;
-      this.teclas[e.code] = true;
-      const acc = typeof ACCIONES !== "undefined" ? ACCIONES[e.code] : null;
-      if (acc) { e.preventDefault(); if (this.onAction) this.onAction(acc); }
-    });
-    addEventListener("keyup", e => { this.teclas[e.code] = false; });
-    addEventListener("blur", () => { this.teclas = {}; });
+    // El teclado y el gamepad los lee input.js (§5.3c), no cada driver.
 
     // Fallback de escritorio para poder verificar el estéreo sin teléfono
     const canvas = renderer.domElement;
@@ -434,16 +430,6 @@ const DisplayCardboard = {
     return this;
   },
 
-  _leerIntent() {
-    const t = this.teclas, i = this.intent;
-    i.move.y = (t.KeyW ? 1 : 0) - (t.KeyS ? 1 : 0);
-    i.move.x = (t.KeyD ? 1 : 0) - (t.KeyA ? 1 : 0);
-    i.turn = (t.KeyE ? 1 : 0) - (t.KeyQ ? 1 : 0);
-    i.rise = (t.KeyR ? 1 : 0) - (t.KeyF ? 1 : 0);
-    i.turbo = !!(t.ShiftLeft || t.ShiftRight);
-    return i;
-  },
-
   recentrar() {
     if (Cabeza.fuente === "sensores") Cabeza.recentrar();
     else { this.pitch = 0; this.rig.camera.rotation.set(0, 0, 0); }
@@ -452,10 +438,11 @@ const DisplayCardboard = {
   start() {
     if (this.corriendo) return;
     this.corriendo = true;
-    this.teclas = {};
     this._fovPrevio = this.rig.camera.fov;
     this.rig.camera.fov = FOV_CARDBOARD;
     this.rig.camera.updateProjectionMatrix();
+    // la viñeta se escala al cuadro de UN ojo (la mitad del aspect)
+    Vigneta.ajustar(this.rig.camera, this.rig.camera.aspect * 0.5);
     // La cabeza escribe la orientación desde cero: se arranca nivelado,
     // sin heredar el pitch del mouse look del modo plano.
     this.pitch = 0;
@@ -474,7 +461,8 @@ const DisplayCardboard = {
       const crudo = Math.max(0, now - this._prev);
       const dtMs = Math.min(100, crudo);
       this._prev = now;
-      this.rig.update(this._leerIntent(), dtMs / 1000);
+      this.rig.update(Input.leer(), dtMs / 1000);
+      Vigneta.update(this.rig, dtMs);
       if (Cabeza.fuente === "sensores") Cabeza.aplicar(this.rig.camera);
       if (this.onUpdate) this.onUpdate(crudo, now, dtMs);
       this.render();
@@ -492,6 +480,7 @@ const DisplayCardboard = {
     // devolver la cámara al estado del modo plano
     this.rig.camera.fov = this._fovPrevio;
     this.rig.camera.updateProjectionMatrix();
+    Vigneta.ajustar(this.rig.camera, this.rig.camera.aspect);
     this.rig.camera.quaternion.identity();
     this.rig.camera.rotation.set(this.rig.headPitch || 0, 0, 0);
     this.renderer.setScissorTest(false);
@@ -499,12 +488,13 @@ const DisplayCardboard = {
     this.renderer.setViewport(0, 0, s.x, s.y);
   },
 
-  /* Separación entre los centros de imagen, en píxeles CSS. `null` = mitad
-     del canvas (comportamiento anterior, sin corrección). */
+  /* Separación entre los centros de imagen, en píxeles CSS. Sin calibrar usa
+     SEP_DEFAULT (330 px, medido en el visor del dueño), acotado a la mitad del
+     canvas para no cruzar las imágenes en una pantalla angosta. */
   separacion() {
     if (this.sepPx != null) return this.sepPx;
     this.renderer.getSize(this._size);
-    return this._size.x / 2;
+    return Math.min(SEP_DEFAULT, this._size.x / 2);
   },
 
   setSeparacion(px) {
@@ -546,6 +536,9 @@ const DisplayCardboard = {
     const r = this.renderer, cam = this.rig.camera;
     r.getSize(this._size);
     const W = this._size.x, H = this._size.y, w2 = Math.floor(W / 2);
+    // misma guarda que en onResize: con 0×0 el aspect sería NaN y la matriz de
+    // proyección quedaría corrupta para siempre
+    if (W < 2 || H < 1) return;
 
     cam.aspect = W / H;
     cam.updateProjectionMatrix();
@@ -577,7 +570,7 @@ const DisplayCardboard = {
       fov: FOV_CARDBOARD, ipd: IPD,
       separacionPx: Math.round(this.separacion()),
       fuenteSeparacion: this.fuenteSep,
-      separacionDefaultPx: Math.round(this._size.x / 2),
+      separacionDefaultPx: Math.min(SEP_DEFAULT, Math.round(this._size.x / 2)),
       desplazamientoPorOjoPx: Math.round(this._size.x / 4 - this.separacion() / 2),
       cabeza: Cabeza.fuente,
       modoCabeza: Cabeza.modo,
