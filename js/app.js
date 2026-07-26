@@ -171,6 +171,9 @@ function usarDriver(nuevo) {
   document.body.classList.toggle("estereo", nuevo.label === "cardboard");
   Perf.espejo(nuevo.label === "cardboard");
   Perf.linea = "";
+  // ventana de medición limpia: cada driver se mide a sí mismo, y el frame
+  // gigante de un diálogo del navegador no puede contaminar al siguiente
+  Perf.reiniciarMuestras();
   driver.start();
   actualizarBotones();
 }
@@ -199,7 +202,23 @@ async function salirVR() {
    camino aceptado por el dueño y este es el experimento. La sesión exige un
    GESTO del usuario, así que ?modo=xr no puede entrar solo — lo que hace es
    que el botón principal pida XR en lugar de cardboard. */
+/* El mando tiene que estar DESPIERTO antes de entrar: Chrome no entrega datos
+   de un gamepad que todavía no interactuó con la página, y dentro de la sesión
+   la pulsación ya no lo despierta (la prueba real del 2026-07-26 se comió una
+   sesión entera así). El primer intento avisa; el segundo entra igual, porque
+   puede no haber mando y no hay que bloquear el camino. */
+let _insistirXR = false;
+
 async function entrarXR() {
+  if (!Input.activado && !_insistirXR) {
+    _insistirXR = true;
+    aviso(`<b>Apretá un botón del mando antes de entrar.</b><br>` +
+      `Todavía no mandó nada a la página, y adentro de la sesión ya no se puede ` +
+      `despertar: el mando aparecería pero no respondería.<br>` +
+      `Después volvé a tocar <b>Probar WebXR</b> (o tocalo de nuevo para entrar sin mando).`);
+    return;
+  }
+  _insistirXR = false;
   if (Rig.alturaOjo() > 60) { Rig.setAlturaOjo(Rig.alturaDron); Chunks.invalidar(); }
   aviso("Abriendo la sesión WebXR…");
   const r = await DisplayWebXR.entrar();

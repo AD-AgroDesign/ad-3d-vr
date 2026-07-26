@@ -136,6 +136,21 @@ const Perf = {
     return this;
   },
 
+  /* Arranca una ventana de medición limpia. La llama el cambio de driver: sin
+     esto, el frame gigante que queda mientras el navegador muestra un diálogo
+     (el permiso y el escaneo de QR al entrar en WebXR duraron 27 s) se queda en
+     la ventana de 180 muestras y envenena el p95 y el mínimo de la sesión
+     siguiente. Pasó en la primera prueba real de XR: p95 27.270 ms y fps
+     mínimo 0,4 en una sesión que corrió a 107 fps. */
+  reiniciarMuestras() {
+    this.muestras.length = 0;
+    this.frames = 0;
+    this.t0 = performance.now();
+    this.fps = 0; this.p95 = 0;
+    this._sobre = 0; this._bajo = 0;
+    this.oculta = false;
+  },
+
   /* `msFrame` tiene que ser el tiempo REAL del frame, sin clampear. */
   frame(renderer, msFrame) {
     this.muestras.push(msFrame);

@@ -112,11 +112,38 @@ const DisplayWebXR = {
     this.session = session;
     session.addEventListener("end", () => this._fin("la terminó el visor o el usuario"));
 
-    // Escala del framebuffer: ?fbs=<n>. Es el dial de nitidez contra fps del
-    // lado de XR (el equivalente de ?pr= en cardboard) y hay que fijarlo ANTES
-    // de setSession, que es cuando three crea la XRWebGLLayer.
-    const fbs = params.has("fbs") ? Math.max(0.4, Math.min(2, +params.get("fbs"))) : null;
-    if (fbs) this.renderer.xr.setFramebufferScaleFactor(fbs);
+    /* ESCALA DEL FRAMEBUFFER — el dial que decide la nitidez, y el hallazgo
+       más caro de la primera prueba real (2026-07-26).
+
+       Con la escala en 1 (el default de three) el runtime dio **536×504 por
+       ojo**: MENOS que los 557×501 del cardboard casero, y bastante menos que
+       los 807×756 que había medido `diag.html`. La diferencia no es del
+       dispositivo, es del camino de capa: `diag.html` crea una `XRWebGLLayer`
+       clásica, y three, cuando el runtime soporta WebXR Layers y hay WebGL2
+       —que es el caso de este teléfono—, crea una **projection layer**, cuyo
+       `scaleFactor` 1 arranca 1,5× más chico. 807/536 = 1,505: da exacto.
+
+       Por eso el default acá NO es 1: se pide el factor nativo que reporte el
+       navegador y se toma al menos 1,5, que es lo que devuelve la resolución
+       que ya habíamos medido. Se puede pagar: en esa prueba la sesión corrió a
+       **86–107 fps** con el objetivo en 60, así que hay margen de sobra para
+       2,25× píxeles. `?fbs=<n>` fuerza cualquier valor (y `?fbs=1` reproduce
+       la medición vieja para comparar).
+
+       Hay que fijarlo ANTES de setSession, que es cuando se crea la capa. */
+    let fbs = params.has("fbs") ? Math.max(0.4, Math.min(2.5, +params.get("fbs"))) : null;
+    if (fbs === null) {
+      let nativo = 1;
+      try {
+        if (typeof XRWebGLLayer !== "undefined" && XRWebGLLayer.getNativeFramebufferScaleFactor)
+          nativo = XRWebGLLayer.getNativeFramebufferScaleFactor(session) || 1;
+      } catch (e) {}
+      fbs = Math.min(2, Math.max(1.5, nativo));
+      this._fbsOrigen = `automática (nativa ${nativo.toFixed(2)})`;
+    } else {
+      this._fbsOrigen = `?fbs=${fbs}`;
+    }
+    this.renderer.xr.setFramebufferScaleFactor(fbs);
     this._fbsPedido = fbs;
 
     this.renderer.xr.enabled = true;
@@ -175,7 +202,13 @@ const DisplayWebXR = {
       fpsSuma: 0, fpsN: 0, fpsMin: Infinity, p95Max: 0,
       tris: 0, calls: 0, framebuffer: null, viewport: null,
       ipd: null, fovY: null, aspectOjo: null,
-      mandos: {}, motivo: ""
+      mandos: {}, motivo: "",
+      /* Si el mando no mandó NADA a la página antes de entrar, adentro ya es
+         tarde: Chrome no entrega datos de un gamepad que todavía no interactuó
+         con la página, y dentro de la sesión la pulsación no lo despierta.
+         Es exactamente lo que pasó en la primera sesión de la prueba real: el
+         mando aparecía en la lista, con sus 17 botones, y los ejes quietos. */
+      mandoActivado: !!Input.activado
     };
     this._muestreo = 0;
     this._fovVigneta = 0;
@@ -311,8 +344,18 @@ const DisplayWebXR = {
        (Se escapó en la primera pasada y el frameRate salía siempre vacío.) */
     const s = this.session;
     if (s) {
-      const bl = s.renderState && s.renderState.baseLayer;
-      if (bl && !m.framebuffer) m.framebuffer = `${bl.framebufferWidth}×${bl.framebufferHeight}`;
+      /* El framebuffer puede venir por dos caminos y en la primera prueba real
+         salió por el segundo, así que el reporte decía "?": three usa una
+         `XRWebGLLayer` sólo si el runtime NO soporta WebXR Layers o si no hay
+         WebGL2; si los hay, crea una **projection layer** y `baseLayer` queda
+         en null. Se leen los dos, y se dice cuál fue. */
+      const rs = s.renderState || {};
+      const bl = rs.baseLayer;
+      const capa = rs.layers && rs.layers[0];
+      if (bl && !m.framebuffer) m.framebuffer = `${bl.framebufferWidth}×${bl.framebufferHeight} (baseLayer)`;
+      else if (capa && capa.textureWidth && !m.framebuffer)
+        m.framebuffer = `${capa.textureWidth}×${capa.textureHeight} (projection layer` +
+          (capa.textureArrayLength > 1 ? ` ×${capa.textureArrayLength}` : "") + ")";
       m.frameRate = s.frameRate || null;
       m.frameRates = s.supportedFrameRates ? Array.from(s.supportedFrameRates) : null;
       m.blend = s.environmentBlendMode || null;
@@ -380,7 +423,8 @@ const DisplayWebXR = {
       triangulosPorOjo: m.tris, drawCallsPorOjo: m.calls,
       framebuffer: m.framebuffer,
       viewportPorOjo: m.viewport,
-      escalaFramebuffer: this._fbsPedido || "(default)",
+      escalaFramebuffer: this._fbsPedido ? `${this._fbsPedido} · ${this._fbsOrigen}` : "(default)",
+      mandoActivadoAlEntrar: m.mandoActivado,
       ipdRuntimeM: m.ipd == null ? null : +m.ipd.toFixed(4),
       fovVerticalPorOjo: m.fovY == null ? null : +m.fovY.toFixed(1),
       aspectPorOjo: m.aspectOjo == null ? null : +m.aspectOjo.toFixed(3),
@@ -407,6 +451,7 @@ const DisplayWebXR = {
       (d.frameRatesSoportados ? ` (soporta ${d.frameRatesSoportados.join(", ")})` : "") +
       ` · blend ${d.environmentBlendMode || "?"} · interacción ${d.interactionMode || "?"}`);
     const mandos = Object.keys(d.mandos);
+    L.push(`mando activado ANTES de entrar: ${d.mandoActivadoAlEntrar ? "sí" : "NO (por eso no responde adentro)"}`);
     L.push(`mandos vistos dentro de la sesión: ${mandos.length ? "" : "NINGUNO"}`);
     for (const k of mandos) {
       const v = d.mandos[k];

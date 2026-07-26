@@ -132,6 +132,16 @@ const Input = {
   perfil: null,
   gamepadId: null,
   gamepadsExtra: null,      // fuente adicional de gamepads (la registra el driver de XR)
+  /* ¿El mando llegó a mandar algo a la página alguna vez?
+
+     No es cosmético: Chrome no entrega datos de un gamepad que todavía no
+     interactuó con la página, y **dentro de una sesión de WebXR ya no se puede
+     despertar** — la pulsación se la queda la sesión. En la primera prueba
+     real de XR (2026-07-26) eso costó una sesión entera: el mando aparecía
+     listado con sus 17 botones y los ejes quietos, y sólo funcionó al volver a
+     entrar DESPUÉS de haberlo usado en el modo cardboard. Con esta bandera se
+     avisa antes de entrar, en vez de descubrirlo con el visor puesto. */
+  activado: false,
   teclas: {},
   intent: { move: { x: 0, y: 0 }, turn: 0, rise: 0, turbo: false },
   /* Giro CONTINUO por default, decisión del dueño tras probar las dos
@@ -287,6 +297,16 @@ const Input = {
       if (!gp || !gp.connected) continue;
       const p = (this.perfil && this.gamepadId === gp.id) ? this.perfil : this._elegirPerfil(gp);
 
+      // los botones que vienen pulsados al conectar (el fantasma 3 de este
+      // mando) NO cuentan como actividad: no son una pulsación del usuario
+      if (!this.activado &&
+          ((gp.axes && gp.axes.some(v => Math.abs(v) > 0.5)) ||
+           (gp.buttons && gp.buttons.some((b, i) =>
+             b && b.pressed && !(this._esperandoSoltar && this._esperandoSoltar.has(i)))))) {
+        this.activado = true;
+        console.log("mando activado: ya entrega datos a la página");
+      }
+
       const ejeAv = this._eje((gp.axes[p.ejes.avance.eje] || 0) * p.ejes.avance.signo);
       const ejeGiro = this._eje((gp.axes[p.ejes.giro.eje] || 0) * p.ejes.giro.signo);
       const dp = this._dpad(gp, p);
@@ -340,6 +360,7 @@ const Input = {
       mando: this.gamepadId,
       mandos: gps.length,
       mandosXR: this.gamepadsExtra ? this.gamepadsExtra().length : 0,
+      activado: this.activado,
       giro: this.giroContinuo ? "continuo" : "snap",
       calibrando: !!this.calib,
       esperandoSoltar: this._esperandoSoltar ? [...this._esperandoSoltar] : []
