@@ -132,6 +132,13 @@ const Input = {
   perfil: null,
   gamepadId: null,
   gamepadsExtra: null,      // fuente adicional de gamepads (la registra el driver de XR)
+  /* Con el menú abierto el stick tiene que elegir opciones, no mover el rig:
+     `capturado` deja la locomoción en cero y el menú lee `crudo`, que son los
+     mismos ejes sin capturar. Se hace acá y no en el menú para que la
+     locomoción vea ceros de verdad — si el menú se limitara a ignorar el
+     stick, el rig igual se movería mientras uno elige. */
+  capturado: false,
+  crudo: { x: 0, y: 0, turn: 0, rise: 0 },
   /* ¿El mando llegó a mandar algo a la página alguna vez?
 
      No es cosmético: Chrome no entrega datos de un gamepad que todavía no
@@ -347,6 +354,10 @@ const Input = {
       const riseBtn = this._botones(gp, p, clave);
       if (riseBtn) rise = riseBtn;
     }
+
+    const c = this.crudo;
+    c.x = mvX; c.y = mvY; c.turn = turn; c.rise = rise;
+    if (this.capturado) { mvX = 0; mvY = 0; turn = 0; rise = 0; turbo = false; }
 
     i.move.x = mvX; i.move.y = mvY;
     i.turn = turn; i.rise = rise; i.turbo = turbo;

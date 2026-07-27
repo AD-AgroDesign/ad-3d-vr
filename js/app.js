@@ -173,6 +173,7 @@ function textoSeparacion(px) {
    corredor más largo, que además es la pose de VR y la única forma de medir
    el presupuesto real sin input (que recién llega en P5). */
 function aplicarPose(nombre, extent) {
+  Menu.poseActual = nombre;                  // el menú muestra la pose vigente
   const fc = state.data[state.scenario] || state.data.multi;
   if (nombre === "corredor") {
     const r = Rig.poseCorredor(fc);
@@ -194,6 +195,7 @@ function usarDriver(nuevo) {
   driver = nuevo;
   document.body.classList.toggle("estereo", nuevo.label === "cardboard");
   Perf.espejo(nuevo.label === "cardboard");
+  Menu.espejo(nuevo.label === "cardboard");
   Perf.linea = "";
   // ventana de medición limpia: cada driver se mide a sí mismo, y el frame
   // gigante de un diálogo del navegador no puede contaminar al siguiente
@@ -299,6 +301,41 @@ function alternarTour(extent) {
   if (state.scenario !== "multi") setScenario("multi");
   if (!Tour.arrancar(state.data.multi, extent, performance.now()))
     aviso("En este campo no hay corredores ni parches para armar el tour.");
+}
+
+/* ---------- Menú (P6) ----------
+   Las opciones que ya tienen botón en el mando (conmutar paisaje, tour,
+   recentrar) están igual en el menú: con el visor puesto no hay forma de
+   recordar un mapeo de cuatro botones, y el menú es el que lo hace explícito.
+   Las dos que NO se podían hacer sin sacarse el visor son la pose y el campo. */
+const POSES = ["aerea", "dron", "corredor"];
+
+function accionDeMenu(id, dato, extent) {
+  if (id === "paisaje") setScenario(state.scenario === "inicial" ? "multi" : "inicial");
+  else if (id === "vista") {
+    const i = POSES.indexOf(Menu.poseActual);
+    const pose = POSES[(i + 1) % POSES.length];
+    console.log("pose:", aplicarPose(pose, extent));
+    Chunks.invalidar();
+  } else if (id === "tour") alternarTour(extent);
+  else if (id === "recentrar") { if (driver === DisplayCardboard) DisplayCardboard.recentrar(); }
+  else if (id === "salir") { Menu.cerrar(); if (driver === DisplayWebXR) DisplayWebXR.salir(); else salirVR(); }
+  else if (id === "campo") cambiarCampo(dato);
+}
+
+/* Cambiar de campo recarga la página: el campo define la proyección, el
+   satélite, el suelo y toda la vegetación, o sea prácticamente la escena
+   entera. Reconstruirla en caliente es una fase en sí misma y no vale la pena
+   antes de saber si el menú queda así (§9.13 quedó pendiente de revisión).
+   Se conservan los parámetros de la URL para no perder el modo ni los diales,
+   y se avisa lo que cuesta: hay que volver a entrar en VR. */
+function cambiarCampo(id) {
+  if (!id || (state.campo && state.campo.id === id)) { Menu.cerrar(); return; }
+  const p = new URLSearchParams(location.search);
+  p.set("campo", id);
+  Menu.cerrar();
+  aviso("Cambiando de campo… hay que volver a entrar en VR.");
+  location.search = p.toString();
 }
 
 function actualizarBotones() {
@@ -416,6 +453,7 @@ function actualizarBotones() {
         tickEscenario(now);            // el cross-fade lo avanza el driver, no el rAF del DOM
         // el tour se cancela solo si el usuario toma el control (ver Tour.update)
         if (Tour.activo) Tour.update(dtMs || 16, now);
+        if (Menu.abierto) Menu.update(dtMs || 16, now);
         Veg.tick(now / 1000);          // reloj del viento
         Sky.update(Rig);
         Chunks.update(Rig.rig.position, now);
@@ -429,6 +467,10 @@ function actualizarBotones() {
         Perf.frame(renderer, msFrame);
       },
       onAction: acc => {
+        /* Con el menú abierto, el mando es del menú: las acciones se desvían
+           en vez de ejecutarse. Es lo que permite que el mismo botón que
+           conmuta el paisaje sirva de "aceptar" adentro del menú. */
+        if (acc === "menu" || Menu.abierto) { Menu.accionDeMando(acc); return; }
         /* Cualquier acción que no sea el propio tour lo corta: si no, el
            usuario y el tour se pelearían por el rig. Es lo que hace el
            original con los eventos del canvas (main.js:1163).
@@ -453,7 +495,6 @@ function actualizarBotones() {
         else if (acc === "sepMenos") aviso(textoSeparacion(DisplayCardboard.ajustarSeparacion(-4)));
         else if (acc === "sepMas") aviso(textoSeparacion(DisplayCardboard.ajustarSeparacion(+4)));
         else if (acc === "tour") alternarTour(extent);
-        else if (acc === "menu") console.log("menú in-world: llega en P6");
       }
     };
 
@@ -464,6 +505,7 @@ function actualizarBotones() {
       onMensaje: bannerTour,
       onFin: motivo => console.log("tour: fin (" + motivo + ")")
     });
+    Menu.init({ onAccion: (id, dato) => accionDeMenu(id, dato, extent) });
 
     DisplayFlat.init(renderer, scene, Rig, cbs);
     DisplayCardboard.init(renderer, scene, Rig, Object.assign({ onAviso: aviso }, cbs));
@@ -512,8 +554,9 @@ function actualizarBotones() {
     if (DEBUG) {
       window.__vr = {
         state, renderer, scene, Rig, Sky, Tiles, TilesFondo, Ground, Veg, Perf, Chunks,
-        DisplayFlat, DisplayCardboard, DisplayWebXR, Cabeza, Inmersion, Input, Vigneta, Tour,
+        DisplayFlat, DisplayCardboard, DisplayWebXR, Cabeza, Inmersion, Input, Vigneta, Tour, Menu,
         alternarTour: () => alternarTour(extent),
+        accionDeMenu: (id, dato) => accionDeMenu(id, dato, extent),
         setScenario, tickEscenario, applyOpacity, applyGrowth, extent,
         animEscenario: () => animEscenario,
         aplicarPose: n => aplicarPose(n, extent), entrarVR, salirVR, entrarXR, usarDriver,
@@ -524,7 +567,7 @@ function actualizarBotones() {
           tiles: Tiles.info, suelo: Ground.info(), veg: Veg.info(),
           chunks: Chunks.info(), perf: Perf.snapshot(renderer),
           estereo: DisplayCardboard.info(), webxr: DisplayWebXR.info(), input: Input.info(),
-          tour: Tour.info(),
+          tour: Tour.info(), menu: Menu.info(),
           camara: {
             x: +Rig.rig.position.x.toFixed(1), z: +Rig.rig.position.z.toFixed(1),
             altura: +Rig.alturaOjo().toFixed(1), rumbo: +Rig.rumbo().toFixed(1)

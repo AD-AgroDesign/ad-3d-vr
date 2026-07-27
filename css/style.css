@@ -114,6 +114,38 @@ body.estereo #tour, body.estereo #tour2 {
 body.estereo #tour { left: calc(50% - var(--sep, 50vw) / 2); }
 body.estereo #tour2 { left: calc(50% + var(--sep, 50vw) / 2); }
 
+/* --- Menú del visor (P6) ---
+   Mismas reglas que el HUD: los dos paneles tienen que ser el MISMO objeto
+   visual (width: max-content y tipografía idéntica) y caer en el centro de
+   cada lente, o el texto no fusiona. */
+#menu, #menu2 {
+  position: fixed; z-index: 22; display: none;
+  top: 50%; left: 50%; transform: translate(-50%, -50%);
+  background: rgba(10, 20, 13, .92); border: 1px solid #3d6b47; border-radius: 12px;
+  padding: 10px 4px; width: max-content; min-width: 240px; max-width: 86vw;
+  font: 13px/1.35 -apple-system, Segoe UI, Roboto, system-ui, sans-serif;
+}
+#menu .titulo, #menu2 .titulo {
+  color: var(--gold); font-size: 12px; letter-spacing: .06em; text-transform: uppercase;
+  padding: 0 14px 6px; opacity: .85;
+}
+#menu .fila, #menu2 .fila {
+  display: flex; gap: 16px; justify-content: space-between; align-items: baseline;
+  padding: 7px 14px; border-radius: 8px;
+}
+#menu .fila.sel, #menu2 .fila.sel { background: #2c5236; }
+#menu .fila .v, #menu2 .fila .v { color: var(--muted); font-size: 12px; }
+#menu .fila.sel .v, #menu2 .fila.sel .v { color: var(--ink); }
+#menu .pie, #menu2 .pie {
+  color: var(--muted); font-size: 11px; padding: 8px 14px 0; text-align: center;
+  border-top: 1px solid rgba(255, 255, 255, .08); margin-top: 6px;
+}
+body.estereo #menu, body.estereo #menu2 {
+  top: 50%; min-width: 200px; max-width: 42vw; font-size: 12px;
+}
+body.estereo #menu { left: calc(50% - var(--sep, 50vw) / 2); }
+body.estereo #menu2 { left: calc(50% + var(--sep, 50vw) / 2); }
+
 /* --- Botones del modo VR --- */
 #vr-botones {
   position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%);
