@@ -50,10 +50,16 @@ const PERFILES = [
     ejes: { avance: { eje: 0, signo: -1 }, giro: { eje: 1, signo: -1 } },
     /* Cuando el stick sale como botones (otro modo de encendido del mando) */
     dpad: { adelante: 12, atras: 13, izquierda: 14, derecha: 15 },
+    /* El botón de subir hace DOS cosas: mantenido sube, y sostenido un segundo
+       abre el menú (pedido del dueño, 2026-07-26). Con cuatro botones reales no
+       hay lugar para uno dedicado, y era el único que tenía la pulsación larga
+       libre. Efecto lateral asumido: hasta que el menú aparece se sube un
+       ratito, porque las dos cosas son el mismo gesto y no hay forma de saber
+       cuál va a ser hasta que pasa el segundo. */
     botones: {
       5: { corto: "toggleScenario", largo: "recenter" },
       0: { corto: "tour", largo: "modo" },
-      2: { mantener: "subir" },
+      2: { mantener: "subir", largo: "menu" },
       1: { mantener: "bajar" }
     },
     ignorar: [3, 4]
@@ -110,7 +116,7 @@ const PERFIL_CIEGO = {
   botones: {
     0: { corto: "toggleScenario", largo: "recenter" },
     1: { corto: "tour", largo: "modo" },
-    2: { mantener: "subir" },
+    2: { mantener: "subir", largo: "menu" },
     3: { mantener: "bajar" }
   },
   ignorar: []
@@ -261,8 +267,14 @@ const Input = {
         st.abajo = false;
         if (mapa.corto && !st.largoHecho) this._accion(mapa.corto);
       }
-      if (mapa.mantener === "subir" && b.pressed) rise += 1;
-      if (mapa.mantener === "bajar" && b.pressed) rise -= 1;
+      /* Un botón que además tiene acción larga deja de mover en cuanto ésta se
+         dispara: si no, al abrir el menú con el botón de subir se seguiría
+         subiendo mientras se lo mantiene apretado, y al cerrar el menú el rig
+         aparecería veinte metros más arriba. */
+      if (!st.largoHecho) {
+        if (mapa.mantener === "subir" && b.pressed) rise += 1;
+        if (mapa.mantener === "bajar" && b.pressed) rise -= 1;
+      }
     }
     return rise;
   },

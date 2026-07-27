@@ -163,7 +163,7 @@ const Menu = {
             (val ? `<span class="v">${val}</span>` : "") +
             (it.hijos ? `<span class="v">›</span>` : "") + `</div>`;
         }).join("") +
-        `<div class="pie">stick: elegir · A: aceptar · D: volver</div>`;
+        `<div class="pie">stick o subir/bajar: elegir · A: aceptar · D: volver</div>`;
     }
     for (const el of [this._el, this._el2]) {
       if (!el) continue;
